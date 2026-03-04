@@ -35,6 +35,8 @@ irm https://claude.ai/install.ps1 | iex
 ### npm 安装 
 npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com
 
+claude update
+
 Claude –version
 
 # 三、开启第三方端点配置
