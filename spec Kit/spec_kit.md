@@ -76,3 +76,27 @@ Use /speckit.implement to execute all tasks and build your feature according to 
 
 # 实际使用示例
 
+在项目命令行生成项目文件结构：
+specify init . --ai claude
+
+项目会生成多个配置文件![alt text](image-1.png)
+
+然后打开claude code 环境，开始使用spec kit 功能。
+
+/specify ![alt text](Snipaste_2026-03-09_14-08-53.png)
+
+第一步描述整个需求：/specify 加需求 ![alt text](image-2.png)
+会生成spec.md 文件，
+
+ 下一步: 可以使用 /speckit.plan 进入规划阶段，或使用 /speckit.clarify 澄清需求细节。
+
+第二步，生成规划 /speckit.plan 加计划 
+会生成plan.md 文件，描述项目的技术栈和架构选择。![alt text](Snipaste_2026-03-09_14-11-41.png)
+
+第三步: 可以使用 /speckit.tasks 生成任务清单，或直接开始实现。
+
+下一步: 可以使用 /speckit.taskstoissues 将任务转换为 GitHub issues，或直接开始实现。
+
+第四步： 使用 /speckit.implement 执行所有任务并构建功能。
+
+
