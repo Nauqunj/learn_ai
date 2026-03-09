@@ -67,3 +67,19 @@ claude mcp add Framelink_Figma_MCP -- npx -y figma-developer-mcp --figma-api-key
     }
   }
 }
+
+
+
+# 如何使用
+
+## 提供figama链接
+
+打开dev mode 模式
+![alt text](image-3.png)
+
+![alt text](image-4.png)
+
+![alt text](image-5.png)
+
+## 发送指令： "请读取这个 Figma 链接，并帮我用 Vue  实现这个组件。"
+![alt text](image-6.png)
