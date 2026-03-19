@@ -14,31 +14,38 @@
 # 安装
 持久安装（推荐）
 一次安装，到处使用：
-
+```
 uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
-
+```
 命令行安装可能遇到 连接githup失败的问题：
 ![alt text](image.png)
 需要设置git 代理，代理服务器设置端口7890
 ![alt text](Snipaste_2026-03-06_12-11-37.png)
-
+```
 git config --global http.proxy http://127.0.0.1:7890
 然后查看git 配置
 git config --global -l
-
+```
 
 然后直接使用该工具：
 
 ## Create new project
+```
 specify init <PROJECT_NAME>
-
+```
 ## Or initialize in existing project
+```
 specify init . --ai claude
+```
 ## or
+```
 specify init --here --ai claude
+```
 
 ## Check installed tools
+```
 specify check
+```
 
 持久安装的优势：
 
