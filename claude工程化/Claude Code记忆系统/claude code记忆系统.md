@@ -129,3 +129,255 @@ interface ApiResponse<T> {
 ```
 这里重点强调一下：记得把  CLAUDE.local.md  加入  .gitignore！
 
+# 规则目录：分类组织
+
+最后说一下 rules，这是一个比较高阶的技巧，初学者可以作为知识了解一下，也可以先略过不看。Rules 是按主题组织的规则文件，支持条件作用域（也就是视情况来确定是否加载该记忆内容），适合场景包括 CLAUDE.md 变得太长时，不同文件类型需要不同规范时，以及前后端分离的项目。位置：.claude/rules/*.md目录结构：
+
+位置：.claude/rules/*.md
+
+目录结构：
+
+```
+.claude/
+└── rules/
+    ├── typescript.md      # TypeScript 规范
+    ├── testing.md         # 测试规范
+    ├── api-design.md      # API 设计规范
+    └── security.md        # 安全规范
+  ```
+  条件作用域示例：.claude/rules/testing.md
+
+```---
+paths:
+  - "src/**/*.test.ts"
+  - "tests/**/*.ts"
+---
+
+# 测试规范
+
+## 命名
+- 单元测试: `*.test.ts`
+- 集成测试: `*.integration.test.ts`
+
+## 结构
+使用 Arrange-Act-Assert 模式：
+
+```typescript
+describe('OrderService', () => {
+  describe('createOrder', () => {
+    it('should create order when stock is available', async () => {
+      // Arrange
+      const mockProduct = createMockProduct({ stock: 10 });
+
+      // Act
+      const order = await orderService.createOrder(mockProduct.id, 1);
+
+      // Assert
+      expect(order.status).toBe('created');
+    });
+  });
+});
+
+## 覆盖率要求
+- 业务逻辑: > 80%
+- 工具函数: > 90%
+- 路由/控制器: 可以较低
+```
+
+真正有价值的 CLAUDE.md，应该长这样。
+
+```
+# 项目规范
+
+## TypeScript
+- 使用 `interface` 定义对象结构，`type` 用于联合类型
+- 禁止 `any`，使用 `unknown` + 类型守卫
+- 函数参数 > 3 个时，使用对象参数
+
+## 错误处理
+```typescript
+// 业务错误
+throw new BusinessError('ORDER_NOT_FOUND', '订单不存在');
+
+// 验证错误（Zod 自动抛出）
+const data = orderSchema.parse(input);
+
+// controller 中不要 try-catch
+// 由全局错误中间件统一处理
+```
+
+不是模糊要求“要高质量”，而是给出了如何做才算高质量；不是“注意错误处理”，而是具体的错误模型；不是抽象描述，而是可直接模仿的代码形态。
+
+
+# 核心原则 3：关键三问题 WHY / WHAT / HOW
+
+WHY —— 为什么要这样做？
+
+```
+## 为什么使用 Zod？
+- TypeScript 只有编译时类型检查
+- API 输入需要运行时验证
+- Zod 可以同时生成 TS 类型和验证逻辑
+- 错误信息自动生成，对用户友好
+```
+# WHAT —— 具体要做什么，不要做什么？
+
+```
+## 数据库操作规范
+- 所有查询通过 Prisma ORM
+- 复杂查询封装在 `src/repositories/`
+- 禁止在 controller/service 中直接写 SQL
+- 事务使用 `prisma.$transaction()`
+```
+# HOW —— 按什么步骤去做？
+
+```
+## 创建新 API 端点
+
+1. 在 `src/schemas/` 创建请求/响应 Zod schema
+2. 在 `src/routes/` 添加路由定义
+3. 在 `src/controllers/` 实现请求处理
+4. 在 `src/services/` 实现业务逻辑
+5. 在 `tests/` 添加测试用例
+
+示例参考: `src/routes/orders.ts`
+```
+
+核心原则 4：渐进式披露：不要把一切都塞进 CLAUDE.md
+
+示例：
+# Step 1：创建基础 CLAUDE.md
+
+先通过 /init 命令自动初始化 CLAUDE.md 文件，或使用下面的命令在项目根目录手动创建记忆文件
+
+```
+touch CLAUDE.md
+```
+
+再创建以下内容
+```
+# 项目：电商平台前端
+
+## 技术栈
+- React 18 + TypeScript
+- Vite 构建
+- TanStack Query（数据获取）
+- Zustand（状态管理）
+- Tailwind CSS
+
+## 目录结构
+src/ 
+├── components/ # 组件 
+│ ├── ui/ # 基础 UI 
+│ └── features/ # 功能组件 
+├── pages/ # 页面 
+├── hooks/ # 自定义 Hooks 
+├── stores/ # Zustand stores 
+├── api/ # API 调用 
+└── types/ # 类型定义
+
+## 组件规范
+- 函数组件 + Hooks
+- Props 接口命名: `XxxProps`
+- 一个组件一个目录: `Button/index.tsx`
+
+## 状态管理
+- 服务端状态: TanStack Query
+- 客户端状态: Zustand
+- 本地状态: useState
+
+## 常用命令
+- `pnpm dev` - 开发服务器
+- `pnpm build` - 构建
+- `pnpm test` - 测试
+```
+
+# Step 2：创建本地记忆
+
+```
+touch CLAUDE.local.md
+echo "CLAUDE.local.md" >> .gitignore
+```
+然后创建如下的内容。
+
+```
+# 本地笔记
+
+## 环境
+- API: http://localhost:8080
+- Mock: 使用 MSW
+
+## 当前任务
+- 重构购物车组件
+- 截止: 本周五
+```
+
+# Step 3：添加条件规则（可选）
+
+```
+mkdir -p .claude/rules
+```
+然后创建如下.claude/rules/testing.md：
+
+```
+---
+paths:
+  - "src/**/*.test.tsx"
+  - "src/**/*.test.ts"
+---
+
+# 测试规范
+
+- 使用 Vitest + React Testing Library
+- 测试文件放在同目录: `Button.test.tsx`
+- 优先测试用户行为，而非实现细节
+
+```typescript
+// ✅ 好
+expect(screen.getByRole('button')).toBeEnabled();
+
+// ❌ 不好
+expect(component.state.isLoading).toBe(false);
+```
+
+示例二：
+优化已有的 CLAUDE.md
+
+# Step 1：识别核心内容
+详细的 API 文档、数据库表结构和部署流程虽然重要，但是完全没有必要每次都读入 Claude 内存，可以移动到单独文件，精简原来的 CLAUDE.md 。
+
+![alt text](image-4.png)
+
+# Step 2：拆分成独立文件
+
+详细的 API 文档、数据库表结构和部署流程虽然重要，但是完全没有必要每次都读入 Claude 内存，可以移动到单独文件，精简原来的 CLAUDE.md
+
+```
+## 核心规范
+[精简内容]
+
+## 详细参考
+- API 端点清单: @docs/api.md
+- 数据库 Schema: @prisma/schema.prisma
+- 部署配置: @docs/deploy.md
+```
+
+# Step 3：使用条件规则
+
+可以考虑进一步把测试规范、前端规范、后端规范拆分到  .claude/rules/，并设置  paths条件。
+
+# 场景三：记忆管理命令
+
+要查看当前记忆，在 Claude Code 中输入：
+
+/memory
+
+就会显示当前加载的所有记忆内容和来源
+
+编辑记忆的命令参数如下。
+
+```
+/memory edit         # 编辑项目级 CLAUDE.md
+/memory edit user    # 编辑用户级记忆
+/memory edit local   # 编辑本地级记忆
+```
