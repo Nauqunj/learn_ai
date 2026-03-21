@@ -145,6 +145,7 @@ model: sonnet
 ```
 
 rontmatter 部分（---  之间）定义子代理的元数据和配置，下方的 Markdown 正文就是子代理的系统提示词（system prompt）。子代理只会收到这段系统提示词和基本环境信息（如工作目录），不会继承主对话的完整系统提示词。
+![alt text](image-1.png)
 
 # description 的设计艺术
 
@@ -157,4 +158,98 @@ description: A code reviewer
 description: Review code changes for quality, security vulnerabilities, and best practices. Use proactively after code is modified or when user asks for code review.
 
 ```
+
+优点：说明了做什么（审查代码质量、安全、规范）和什么时候用（代码修改后，或用户请求时）。“Proactively” 这个关键词会鼓励 Claude 在合适的时机主动委派任务。
+
+
+tools vs disallowedTools：白名单与黑名单控制子代理能使用哪些工具有两种方式：
+```
+# 方式一：白名单 (tools) — "只能用这些"
+# 适合：需要严格限制的场景（如只读审查）
+tools: Read, Grep, Glob
+
+# 方式二：黑名单 (disallowedTools) — “继承所有，但排除这些”
+# 适合：需要大部分工具但排除少数危险工具的场景
+disallowedTools: Write, Edit
+```
+不要同时使用两者——选一种即可。
+工具权限应遵循最小权限原则——只开放必要的工具，能用 Read 完成的任务，就不要给 Edit。以下是根据用途划分的典型工具组合：
+
+```
+只读型（审计/检查）         研究型（信息收集）         开发型（读写改）
+├── Read                    ├── Read                   ├── Read
+├── Grep                    ├── Grep                   ├── Write
+└── Glob                    ├── Glob                   ├── Edit
+                            ├── WebFetch               ├── Bash
+                            └── WebSearch              ├── Glob
+                                                       └── Grep
+```
+
+# model：模型选择与默认值
+![alt text](image-2.png)
+
+# permissionMode：权限模式
+permissionMode  控制子代理在执行过程中遇到需要权限的操作时如何处理。子代理会继承主对话的权限上下文，但可以通过此字段覆盖行为：
+![alt text](image-3.png)
+
+举个例子，如果你希望子代理能跑  git diff  但绝不能修改文件，可以这样配置：
+```
+---
+name: code-reviewer
+tools: Read, Grep, Glob, Bash
+permissionMode: plan          # 强制只读模式，即使有 Bash 也无法写入
+---
+```
+permissionMode: plan  是系统级的只读保障。
+
+# 子代理的存放位置与优先级
+
+子代理可以被设置为不同的作用域。当多个作用域存在同名子代理时，高优先级的会覆盖低优先级的。
+![alt text](image-4.png)
+
+子代理可以被设置为项目级或用户级，项目级（仅当前项目可用）存放位置如下所示，适合项目特有的角色，比如针对特定框架的测试运行器
+
+```
+your-project/
+└── .claude/
+    └── agents/
+        ├── test-runner.md
+        └── code-reviewer.md
+
+```
+用户级（所有项目可用）子代理适合通用角色，比如日志分析器、通用代码审查器。
+
+```
+~/.claude/
+└── agents/
+    ├── general-reviewer.md
+    └── log-analyzer.md
+```
+
+# 创建子代理的三种方式
+
+方式一：交互式创建（推荐新手使用）。在 Claude Code 中输入  /agents
+
+```
+步骤 1：输入 /agents
+步骤 2：选择 "Create new agent"
+步骤 3：选择存放位置（User-level 或 Project-level）
+步骤 4：选择 "Generate with Claude" 并描述功能
+步骤 5：选择需要的工具
+步骤 6：选择模型
+步骤 7：保存
+```
+方式二：手写配置文件，直接创建  .claude/agents/your-agent.md  文件。其优势是更精细的控制，方便版本管理，可以从其他项目复制。
+
+方式三：CLI 参数临时创建，通过  --agents  参数，可以在启动 Claude Code 时传入 JSON 格式的子代理定义。这种方式创建的子代理仅在当前会话中存在，不会保存到磁盘。这种方式特别适合 CI/CD 自动化时在流水线中临时创建任务专用的子代理。
+
+
+# 子代理的运行模式
+
+代理不只是“派出去，等回来”这么简单。了解它的运行模式，能让你更高效地使用。子代理可以在前台或后台运行
+
+claude 会根据任务自动选择前台或后台。你也可以手动控制。对 Claude 说 “run this in the background”正在运行的前台子代理可以按  Ctrl+B  切换到后台
+启动前，Claude Code 会预先请求子代理可能需要的所有权限——因为后台运行时无法弹出交互式确认。如果后台子代理因权限不足而失败，你可以恢复它到前台重试。
+
+每个子代理执行完成后，Claude 会自动收到它的  agent ID。如果你需要在之前的子代理基础上继续工作，可以让 Claude 恢复（Resume）它：
 
