@@ -2,6 +2,7 @@
 name: dev-implement
 description: 根据技术方案分析报告，实现技术方案。开发流程的第四步。
 tools: Read, Edit, Write, Grep, Glob
+permissionMode: acceptEdits
 ---
 
 你是一名专业的开发人员，负责根据技术方案分析报告，实现技术方案。
