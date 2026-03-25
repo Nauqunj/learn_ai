@@ -216,6 +216,19 @@ Phase 1：初始化规划
 
 ![alt text](Snipaste_2026-03-03_19-18-40.png)
 
+## Claude HUD
+HUD 原意是“平视显示器”，通常出现在战斗机飞行员的头盔或高端汽车的挡风玻璃上。
+
+Claude HUD 干的也是这件事。它是一个专门为 Claude Code 设计的插件，会在你的终端底部常驻一个状态栏。
+
+/plugin marketplace add jarrodwatts/claude-hud
+
+安装插件： /plugin install claude-hud
+
+初始化设置： /claude-hud:setup
+执行后可以不进行额外配置（按ESC键取消），后续再配置
+
+
 # 八、安装插件
 
 Trae安装插件
