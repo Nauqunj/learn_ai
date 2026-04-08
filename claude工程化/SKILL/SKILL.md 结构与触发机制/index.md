@@ -60,3 +60,218 @@ Claude 在加载 code-review Skill 时，所做的事情，本质上是同一个
 
 这里我们注意到，渐进式加载时 Token 的节省比例高达 78% ~ 98%。这就是为什么 Skills 采用“渐进式披露”而非“一次性加载”。当用户请求可能匹配多个 Skills 时，Claude 会：评估每个 Skill 的 description 与用户请求的相关性。选择最相关的那个。如果不确定，可能会询问用户或使用通用方式处理。之前讲过 Skill 有两种触发方式，理解这一点对 Skill 设计和触发过程也很重要。
 
+设有  disable-model-invocation: true  的 Skill，其 description 不会加载到上下文——Claude 完全看不到它，只有用户  /name  才能触发。
+
+另外，可以采用三种方式来控制 Claude 对 Skills 的访问。全局禁用：在  /permissions  中 deny Skill  工具精确控制：Skill(commit)  精确匹配，Skill(deploy *)  前缀匹配逐个控制：给 Skill 加  disable-model-invocation: true frontmatter
+```
+# 权限规则示例
+Skill(commit)        # 允许 Claude 使用 commit skill
+Skill(review-pr *)   # 允许 Claude 使用 review-pr skill（带任意参数）
+Skill(deploy *)      # 拒绝 Claude 使用 deploy skill（放在 deny 列表）
+```
+好的 Skill 设计遵循“导航页 + 详情页”模式
+SKILL.md                    ← 导航页：概述 + 引用（< 500 行）
+├── reference.md            ← 详情页：详细 API 文档
+├── examples.md             ← 详情页：使用示例
+└── scripts/validate.sh     ← 工具：可执行脚本
+
+注意：SKILL.md 应该被控制在 500 行以内。如果过于复杂，应该将详细参考资料移到独立文件，并在 SKILL.md 中进行引用（也就是我们所常说的渐进式加载）
+
+Skills 的存放位置决定了谁能使用它，以及优先级顺序。
+
+![alt text](image-5.png)
+
+同名优先级：Enterprise > Personal > Project。Plugin Skills 使用  plugin-name:skill-name  命名空间，不与其他级别冲突。
+
+当你在子目录（如  packages/frontend/）中工作时，Claude Code 会自动发现该目录下的  .claude/skills/。这种 monorepo 的 Skills 自动发现机制让 monorepo 中的每个 package 都可以有自己的 Skills。
+
+# 两大类型的 Skills：参考型和任务型
+从工程角度，Skill 内容分为两类，参考型和任务型。参考型 Skill 影响“怎么做”，任务型 Skill 决定“做什么”。前者是语义环境，后者是具体行动。你在写 description 时需要明确它属于哪种类型。\
+
+![alt text](image-6.png)
+
+```
+# 参考型——Claude 自动选择是否使用
+name: api-conventions
+description: API design patterns for this codebase. Use when writing or reviewing API endpoints.
+
+# 任务型——通常由用户手动触发
+name: deploy
+description: Deploy the application to production
+disable-model-invocation: true
+```
+
+从企业本体论的视角看，所谓“参考型”和“任务型”Skill，其实对应的是两种不同的组织存在方式。参考型 Skill 更像组织的行为规范层。它定义“在这个世界里，什么是正确的做法”——例如 API 设计标准、代码风格、错误处理约定。这类 Skill 通常由模型根据语义自动判断是否加载，它不主导行动，而是塑造行动的方式。它属于“世界规则”。
+
+任务型 Skill 则更像组织的操作流程层。它定义一次明确的行动——部署、发布、迁移、生成报告等。这类行为具有边界和风险，通常需要显式触发，因此常配合 disable-model-invocation 使用。它属于“世界事件”。
+
+# 创建一个参考型 SKILL.md 文件：api-conventions
+在 Claude Code 中，每个 Skill 独占一个目录。其标准的目录和文件结构如下：.claude/skills//SKILL.md。
+因此，首先要在项目中创建一个以 skill 名称命名的目录（参考我的 Repo 中的 04-Skills/projects/01-reference-skill）。里面放  SKILL.md  文件。
+
+我们即将要创建的这个参考型 Skill  是一个“API 设计规范”：
+
+```
+.claude/skills/api-conventions/     # skill 目录，名称即 skill 名
+└── SKILL.md                        # 主文件（必需）
+---
+name: api-conventions
+description: API design patterns and conventions for this project. Covers RESTful URL naming, response format standards, error handling, and authentication requirements. Use when writing or reviewing API endpoints, designing new APIs, or making decisions about request/response formats.
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+---
+
+# API Design Conventions
+
+These are the API design standards for our project. Apply these conventions whenever working with API endpoints.
+
+## URL Naming
+
+- Use plural nouns for resources: `/users`, `/orders`, `/products`
+- Use kebab-case for multi-word resources: `/order-items`, `/user-profiles`
+- Nested resources for belongsTo relationships: `/users/{id}/orders`
+- Maximum two levels of nesting; beyond that, use query parameters
+- Use query parameters for filtering: `/orders?status=active&limit=20`
+
+## Response Format
+
+All API responses must follow this structure:
+
+{
+  "data": {},        // 成功时返回的数据
+  "error": null,     // 错误时返回错误对象 { code, message, details }
+  "meta": {          // 分页和元信息
+    "page": 1,
+    "limit": 20,
+    "total": 100
+  }
+}
+
+## HTTP Status Codes
+
+- 200: 成功返回数据
+- 201: 成功创建资源
+- 400: 请求参数错误
+- 401: 未认证
+- 403: 无权限
+- 404: 资源不存在
+- 422: 业务逻辑错误
+- 500: 服务器内部错误
+
+## Authentication
+
+- All endpoints require Bearer token unless explicitly marked as public
+- Public endpoints must be documented with `@public` annotation
+- Token format: `Authorization: Bearer <jwt-token>`
+
+## Versioning
+
+- API version in URL path: `/api/v1/users`
+- Breaking changes require new version
+```
+这个文件有三个部分：YAML frontmatter，是通过---包裹的元数据Markdown 正文，是技能的具体说明辅助文件：.claude/skills//SKILL.md——每个 Skill 在自己的目录中，可以包含辅助文件
+注意这个 Skill 的关键特征——它是一个典型的参考型 Skill。没有执行步骤：不是先做 A 再做 B，而是“遵循这些规范”。没有输出模板：不要求 Claude 输出固定格式的报告。没有设disable-model-invocation：Claude 可以自动判断何时需要。只读工具：allowed-tools  限制为 Read/Grep/Glob，因为规范查阅不需要改代码。
+
+这正是企业本体论的体现——它告诉 Claude 在我们的世界里，API 应该长什么样。在这里，description 是 Skill 的灵魂，因为它不是给人看的文档，而是给 Claude 看的触发器。Claude 选择是否激活一个 Skill，完全依赖于阅读 description。这不是关键词匹配，而是语义理解。
+```
+用户输入: "帮我看看这段代码有没有问题"
+
+Claude 思考过程：
+1. 扫描所有 Skills 的 description
+2. 看到 "code-reviewing" 的 description:
+   "Review code for quality... Use when the user asks for code review..."
+3. 语义推理："看看代码有没有问题" ≈ "code review"
+4. 决定：激活这个 Skill
+```
+
+如果你这样写 description，想想看合适么？
+```
+description: Handles PDFs
+```
+很明显，问题在于太模糊，“handles”是什么意思？读取？转换？合并？Claude 不知道什么时候该用它。用户说“帮我处理这个 PDF”时，Claude 可能不确定这个 Skill 是否合适。我们再对比一下更好的 description 长什么样。
+
+```
+description: Extract text and tables from PDF files, fill forms, merge documents. Use when working with PDF files or when the user mentions PDFs, forms, or document extraction.
+```
+为什么这版更好？因为它列出了具体动作（extract, fill, merge）；包含了用户可能说的关键词（PDF, forms, document extraction）；明确说明了触发场景（“Use when…”）因此，我给你总结了一个 description 写作公式：
+
+description = [做什么] + [怎么做] + [什么时候用]
+套用公式创作几个示例 Skill：
+```
+# 代码审查 Skill
+description: Review code for quality, security, and best practices. Checks for bugs, performance issues, and style violations. Use when the user asks for code review, wants feedback on their code, mentions reviewing changes, or asks about code quality.
+
+# API 文档 Skill
+description: Generate API documentation from code. Extracts endpoints, parameters, and response schemas. Use when the user wants to document APIs, create API reference, generate endpoint documentation, or needs help with OpenAPI/Swagger specs.
+
+# 数据库查询 Skill
+description: Query databases and analyze results. Supports SQL generation, query optimization, and result interpretation. Use when the user asks about data, wants to run queries, needs database information, or mentions tables/schemas.
+```
+
+当你有多个 Skills 时，确保它们的 description 有明确区分：
+```
+# ❌ 容易冲突
+name: unit-testing
+description: Write tests for code
+
+name: integration-testing
+description: Write tests for code
+# ✅ 明确区分
+name: unit-testing
+description: Write and run unit tests for individual functions. Use for testing single functions or methods in isolation, mocking dependencies, and verifying function behavior.
+
+name: integration-testing
+description: Write and run integration tests for system components. Use when testing how multiple components work together, testing API endpoints end-to-end, or verifying database interactions.
+```
+
+# Skills Frontmatter 字段详解
+
+Claude Code 官方支持的完整 frontmatter 字段如下。
+
+```
+---
+name: my-skill-name                # 可选：Skill 标识符（省略则用目录名）
+description: What this does        # 推荐：触发器（最重要！）
+argument-hint: "[issue-number]"    # 可选：自动补全时的参数提示
+disable-model-invocation: true     # 可选：禁止 Claude 自动触发
+user-invocable: false              # 可选：对用户隐藏 /skill-name
+allowed-tools:                     # 可选：限制可用工具
+  - Read
+  - Grep
+  - Glob
+model: sonnet                      # 可选：指定执行模型
+context: fork                      # 可选：在子代理中隔离执行
+agent: Explore                     # 可选：context: fork 时的代理类型
+hooks:                             # 可选：作用域为此 Skill 的 Hooks
+  PreToolUse:
+    - matcher: Write
+      hooks:
+        - type: command
+          command: "echo 'Write called in skill'"
+---
+```
+
+其中所有字段都是可选的，但强烈建议提供  description，否则 Claude 无法判断何时使用。
+name  字段：最大 64 字符，只能使用小写字母、数字、连字符，推荐使用动名词形式：code-reviewing、api-documenting、bug-fixing。如果省略了这个字段（通常不大可能啦），则自动使用目录名（.claude/skills/code-reviewing/ → name 为  code-reviewing）description  字段：这是最重要的字段——它决定 Skill 何时被触发。这个字段应该包含两部分信息：这个 Skill 做什么，以及什么情况下使用它。如果省略了这个字段（也不大可能啦），系统会使用 Markdown 正文的第一段作为 description。
+
+注意：所有 Skill 的 description 会被加载到上下文中供 Claude 判断选择，默认总预算为  15,000 字符。如果你的 Skills 很多，导致 description 被截断，可以运行  /context  查看警告，并通过环境变量  SLASH_COMMAND_TOOL_CHAR_BUDGET  调大预算。
+
+argument-hint 字段：自动补全提示，为用户提供参数格式提示，在输入  /skill-name  时系统会自动补全显示：
+
+disable-model-invocation  和  user-invocable这两个字段组合起来控制“谁能触发这个 Skill”。
+
+![alt text](image-7.png)
+
+allowed-tools  字段用来限制 Skills 被激活时 Claude 能使用的工具。Skills 支持的工具包括：
+![alt text](image-8.png)
+
+还可以更精细地控制 Bash 命令。allowed-tools: - Bash(git:*) # 只能执行 git 命令 - Bash(npm test:*) # 只能执行 npm test 相关命令
+权限交互：allowed-tools  中的工具在 Skill 激活时无需逐次确认。你的全局权限设置（/permissions）仍然控制其他工具的审批行为。
+
+context、agent、model——Skills 的执行环境。
+![alt text](image-9.png)
+好了，这就是所有 frontmatter 字段的说明。现在，你可以这样测试这个 api-conventions：
+帮我写一个用户管理的 API 接口。
+Claude 会自动识别这是 API 相关需求，激活 api-conventions Skill，然后按照规范生成代码——使用复数名词的 URL、标准的响应格式、正确的状态码。注意，我们并没有输入  /api-conventions，只是自然地描述需求，Claude 就自动加载了这份"企业知识"。这就是参考型 Skill 的威力——知识在需要的时候自动到场。总结一下
