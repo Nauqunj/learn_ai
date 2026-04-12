@@ -260,3 +260,246 @@ Generate or update API documentation for Express.js routes.
   - Any routes that could not be fully analyzed (with reasons)
   - Warnings (missing auth, undocumented parameters, etc.)
 ```
+```
+06-agent-skill-combo/
+├── .claude/
+│   ├── agents/
+│   │   └── api-doc-generator.md     # SubAgent：角色 + 使命（WHO/WHAT）
+│   ├── skills/
+│   │   └── api-generating/
+│   │       ├── SKILL.md              # Skill：工作流程 + 规则（HOW）
+│   │       ├── scripts/
+│   │       │   └── detect-routes.py  # 路由检测脚本（处理链式路由）
+│   │       └── templates/
+│   │           └── api-doc.md        # 文档模板
+│   └── settings.local.json           # 权限预配置
+├── src/
+│   └── routes/
+│       ├── users.js                  # 标准 CRUD（5 条路由）
+│       └── orders.js                 # 含链式路由（5 条路由）
+├── docs/api/                         # 生成的文档（输出目录）
+└── README.md
+```
+
+下面，在 Claude Code 中，运行 SubAgent：
+```
+> 用 api-doc-generator 为 src/ 目录生成 API 文档
+```
+检查生成的文档：docs/api/users.md  应包含 5 个端点docs/api/orders.md  应包含 5 个端点（含  GET /:id/status  和  PUT /:id/status）需要认证的端点应有 🔒 标记观察它的工具调用记录，SubAgent 确实执行了脚本、使用了模板，并严格遵循了 SKILL.md 的工作流程。Skill 注入真的有效。
+
+# 模式二：Skill + context: fork（方向 B 的直接应用）
+
+Skill 自带任务指令，Skill 包含 SubAgent，通过 context: fork  派一个子代理去执行。这种模式的适用场景是一个独立完整的任务，不需要与主对话交互，执行完把结果送回来就行。
+
+```
+---
+name: codebase-research
+description: Deep research into codebase topics
+context: fork # 关键点！
+agent: Explore
+---
+
+Research $ARGUMENTS thoroughly...
+---
+
+项目结构如下：
+```
+07-skill-fork-demo/
+├── .claude/
+│   └── skills/
+│       └── code-health-check/
+│           └── SKILL.md              # context: fork + agent: general-purpose
+├── src/
+│   ├── app.js                        # 含硬编码密钥
+│   ├── routes/
+│   │   ├── products.js               # 含 SQL 注入、缺少 try/catch
+│   │   └── categories.js             # 含未使用函数、重复逻辑
+│   └── utils/
+│       └── db.js                     # 含 eval() 使用
+└── README.md
+```
+在这个项目中，你想做一次代码质量扫描，但不想让大量中间文件内容污染主对话。这正是  context: fork  的典型场景——Skill 自己派一个子代理去做，做完把报告送回来。
+
+这个项目和上一个项目（模式一）的区别是模式一（Project 05）需要 SubAgent .md  定义文件 + skills:  字段。而模式二（本项目 Project 04）只需要 SKILL.md 一个文件，context: fork + agent:  自动搞定其它。
+
+```
+---
+name: code-health-check
+description: Perform a comprehensive code health check on a directory.
+context: fork                    # ← 关键：在隔离子代理中执行
+agent: general-purpose           # ← 子代理类型
+allowed-tools: [Read, Grep, Glob] # ← 只读，不修改代码
+---
+
+# Code Health Check
+
+Analyze the codebase at `$ARGUMENTS` and produce a structured health report.
+
+## Checks to Perform
+1. File Organization - 文件大小、目录结构
+2. Error Handling - try/catch、错误传播
+3. Security Basics - 硬编码密钥、eval()、SQL 注入
+4. Code Quality - 重复代码、未使用变量
+
+## Output Format
+Return a structured report:
+- Overall health score (A/B/C/D/F)
+- Issues found (categorized by severity: CRITICAL/WARNING/INFO)
+- Top 3 recommendations
+```
+![alt text](image-3.png)
+
+此时 Claude Code 的执行流程如下：
+```
+/code-health-check src/
+  │
+  ├─ SKILL.md 被激活（context: fork）
+  ├─ 自动创建 general-purpose 子代理
+  ├─ 子代理在隔离上下文中：
+  │   ├─ Glob 扫描 src/ 下所有 .js 文件
+  │   ├─ Read 每个文件
+  │   ├─ Grep 搜索 eval(), hardcoded secrets 等模式
+  │   └─ 生成健康报告
+  └─ 返回报告到主对话（主对话上下文干净）
+```
+此处的验证要点是：是否发现了 3 个 CRITICAL 问题？（硬编码密钥、SQL 注入、eval）是否发现了 WARNING 和 INFO 级别问题？主对话上下文是否干净——你看不到子代理读文件的中间过程。
+
+模式二的适用场景总结如下。
+![alt text](image-4.png)
+
+# 模式三：流水线中的 Skill 分工（方向 A 的多阶段串联）
+
+多个子代理各自预加载不同的 Skill，按阶段串联执行。每个阶段的输出作为下一阶段的输入。这种模式是和复杂的多阶段任务（我们之前子代理部分也介绍过类似的示例），但此处每个阶段需要通过 Skill 来配备不同的专业知识。
+
+项目整体结构如下。
+
+```
+08-skill-pipeline/
+├── CLAUDE.md                              ← 流水线编排指令
+├── .claude/
+│   ├── agents/
+│   │   ├── route-scanner.md               ← 阶段 1: 路由扫描专家 (haiku)
+│   │   ├── doc-writer.md                  ← 阶段 2: 文档编写专家 (sonnet)
+│   │   └── quality-checker.md             ← 阶段 3: 质量检查专家 (haiku)
+│   ├── skills/
+│   │   ├── route-scanning/
+│   │   │   ├── SKILL.md                   ← 扫描工作流程
+│   │   │   └── scripts/scan-routes.py     ← 路由扫描脚本
+│   │   ├── doc-writing/
+│   │   │   ├── SKILL.md                   ← 文档生成工作流程
+│   │   │   └── templates/endpoint-doc.md  ← 文档模板
+│   │   └── quality-checking/
+│   │       ├── SKILL.md                   ← 质量检查工作流程
+│   │       └── rules/doc-standards.md     ← 质量标准规则
+│   └── settings.local.json
+├── src/routes/
+│   ├── products.js                        ← 7 条路由（含链式路由）
+│   └── categories.js                      ← 5 条路由
+└── docs/                                  ← 生成的文档输出
+```
+一个完整的 API 文档流程可以拆分为三个阶段，每个阶段需要不同的专业能力。
+![alt text](image-5.png)
+
+每一个阶段的输入输出流程如下。
+```
+阶段 1: 分析子代理
+  └─ skills: ["code-analyzing"]
+  └─ 输出：代码分析报告
+
+阶段 2: 重构子代理
+  └─ skills: ["refactoring-patterns"]
+  └─ 输入：阶段 1 的报告
+  └─ 输出：重构方案
+
+阶段 3: 测试子代理
+  └─ skills: ["testing-conventions"]
+  └─ 输入：阶段 2 的代码变更
+  └─ 输出：测试结果
+```
+
+阶段 1：Route Scanner。对应 Skill route-scanning/SKILL.md：包含扫描脚本  scan-routes.py，输出 JSON 格式的路由清单。
+```
+# .claude/agents/route-scanner.md
+---
+name: route-scanner
+model: haiku                    # 轻量任务用 haiku
+tools: [Read, Grep, Glob, Bash]
+skills:
+  - route-scanning              # 预加载扫描知识
+---
+You are a route scanning specialist. You are Stage 1 of a documentation pipeline.
+```
+阶段 2：Doc Writer。对应 Skill doc-writing/SKILL.md：包含文档模板  endpoint-doc.md，按模板生成标准化文档。
+
+```
+# .claude/agents/doc-writer.md
+---
+name: doc-writer
+model: sonnet                   # 需要理解代码逻辑，用 sonnet
+tools: [Read, Write, Glob]
+skills:
+  - doc-writing                 # 预加载文档编写知识
+---
+You are a documentation writing specialist. You are Stage 2 of a documentation pipeline.
+```
+
+阶段 3：Quality Checker对应 Skill quality-checking/SKILL.md：包含质量标准规则  doc-standards.md，逐项检查文档质量。
+```
+# .claude/agents/quality-checker.md
+---
+name: quality-checker
+model: haiku                    # 规则检查用 haiku 足够
+tools: [Read, Grep, Glob]       # 只读，不修改文档
+skills:
+  - quality-checking            # 预加载质量检查知识
+---
+You are a documentation quality specialist. You are Stage 3 of a documentation pipeline.
+```
+
+流水线的编排逻辑写在  CLAUDE.md  中：
+```
+# API Documentation Pipeline
+
+When the user asks to run the documentation pipeline:
+
+### Stage 1: Route Scanning
+Use the `route-scanner` agent to scan the source directory.
+Collect the route manifest (JSON) from its output.
+
+### Stage 2: Documentation Generation
+Use the `doc-writer` agent to generate documentation.
+Pass the route manifest from Stage 1 as input context.
+
+### Stage 3: Quality Validation
+Use the `quality-checker` agent to validate the generated docs.
+Report the quality verdict to the user.
+```
+
+编排的关键在于每个阶段的输出是下一阶段的输入。Claude 主对话扮演“项目经理”角色，依次调用三个专家。
+
+下面进行运行与验证。
+```
+# 先验证扫描脚本
+python3 .claude/skills/route-scanning/scripts/scan-routes.py src/
+# 预期：发现 12 条路由（products 7 条 + categories 5 条）
+
+# 运行完整流水线
+> 对 src/ 目录运行文档流水线
+
+# 或者分阶段手动运行
+> 用 route-scanner 扫描 src/ 目录的路由
+> 用 doc-writer 根据上面的路由清单生成文档
+> 用 quality-checker 验证 docs/ 目录下生成的文档
+```
+
+对于流水线模式的设计，需要注意下面几个要点。要点一：定义清晰的阶段间接口每个阶段的 SKILL.md 都明确写了输出格式。阶段 1 输出 JSON 路由清单阶段 2 输出文件列表 + 路由覆盖数阶段 3 输出 PASS/NEEDS_REVISION 报告这些就是阶段间的“接口合约”。
+
+要点二：每个 Skill 只关注一件事route-scanning  只扫描路由，不生成文档。doc-writing  只生成文档，不检查质量。quality-checking  只检查质量，不修改文档。
+
+单一职责让每个 Skill 更简洁、更可测试、更可复用。
+
+要点三：编排逻辑集中管理流水线的顺序、数据传递逻辑都放在  CLAUDE.md  中。如果要调整流程（比如跳过阶段 3），只需修改  CLAUDE.md，不需要动 Skill 或 SubAgent。
+
+三种模式完整对照
+
+![alt text](image-6.png)
