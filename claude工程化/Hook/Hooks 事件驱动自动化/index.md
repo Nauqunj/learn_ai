@@ -117,7 +117,7 @@ Matcher 匹配用于指定 Hook 应用于哪些工具。它支持四种匹配模
 # 四种 Hook 执行类型
 当一个 Hook 被触发后，其具体执行方式有四种，前三种能力和代价逐级递增，第四种面向远程服务场景。
 
-Command 类型——执行 Shell 脚本
+## Command 类型——执行 Shell 脚本
 这是最常用、最可靠的类型。command可以是任何 shell 命令或脚本路径。timeout 指定超时时间（毫秒），默认 60 秒。Command 类型的优势在于确定性——同样的输入永远产生同样的输出，不存在 LLM 的随机性。一个正则表达式匹配  rm -rf /，要么匹配到，要么没匹配到，没有“可能”“大概”的中间地带。
 ```
 {
@@ -126,3 +126,38 @@ Command 类型——执行 Shell 脚本
   "timeout": 30000
 }
 ```
+## Prompt 类型——LLM 评估
+规则无法用确定性脚本表达时，就需要 LLM 的判断力。Prompt 类型会用一个小型 LLM（通常是 Haiku）来评估当前情况。比如“这段代码是否有安全隐患”——这种判断需要理解代码语义，不是简单的模式匹配能解决的。但 Prompt 类型只能“看一眼就判断”，它无法主动去读取更多文件来辅助决策。
+```
+{
+  "type": "prompt",
+  "prompt": "Evaluate if this task was completed correctly. Check for any errors or incomplete work."
+}
+```
+
+## Agent 类型——子代理评估
+
+这是最强大也最“重”的评估方式。Agent Hook 会启动一个子代理，这个子代理可以使用 Read、Grep、Glob 等工具来验证条件——不只是“看一眼就判断”，而是可以“翻代码确认”。比如验证“所有公共 API 都有文档注释”，需要子代理实际遍历代码文件才能做出准确判断。
+```
+{
+  "type": "agent",
+  "prompt": "Verify that all unit tests pass. Run the test suite and check the results. $ARGUMENTS",
+  "timeout": 120
+}
+```
+还有一种  HTTP 类型——它不在本地执行逻辑，而是把事件数据以 POST 请求发送到远程 HTTP 端点，由远程服务返回决策结果。适合团队共享审计服务、集中式安全扫描等场景。
+一句话概括：能用 command 的不用 prompt，能用 prompt 的不用 agent，需要对接远程服务时用 http。确定性规则永远比 LLM 判断更可靠，LLM 判断比子代理执行更快。
+![alt text](image-3.png)
+
+
+# PreToolUse：工具执行前的守门
+
+PreToolUse 是最强大的 Hook 事件，因为它能阻止工具执行。它就像机场的安检门——在你登机（工具执行）之前，先过一道检查。PreToolUse Hook 可以做三件事：允许（allow，放行），拒绝（deny，拦截），修改（updatedInput，改写输入参数后再执行）。
+第三种能力特别有趣——你不仅能“放行或拦截”，还能“偷偷改参数”。比如用户要执行  rm -rf /tmp/test，你可以把它改成  rm -rf /tmp/test --dry-run，先看看会删什么再说。
+
+要写出有效的 PreToolUse Hook，你需要理解它的通信协议——脚本从 stdin 读入什么数据、向 Claude 返回什么决策
+每个 Hook 脚本通过 stdin 接收一个 JSON 对象，包含做出判断所需的全部上下文。
+
+这些字段告诉你：谁在执行（session_id），在哪里执行（cwd），什么权限模式（permission_mode），要执行什么工具（tool_name），什么参数（tool_input）。有了这些信息，你的脚本就能精准判断这个操作是否安全。
+
+Hook 脚本通过退出码和 stdout JSON 告诉 Claude 下一步做什么。
