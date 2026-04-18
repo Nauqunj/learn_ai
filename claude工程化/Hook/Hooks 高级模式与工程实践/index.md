@@ -530,3 +530,275 @@ fi
 exit 0
 ```
 利用  CLAUDE_FILE_PATH  可以让 Hook 只在特定目录下生效——比如只对  src/  目录下的文件运行 Lint。
+```
+#!/bin/bash
+# 只在 src/ 目录执行 lint
+if [[ "$CLAUDE_FILE_PATH" == */src/* ]]; then
+    npm run lint "$CLAUDE_FILE_PATH"
+fi
+```
+这种条件过滤让 Hook 更精准，你不需要对配置文件、文档、测试文件都跑同样的检查。
+
+## 在 Commands 和 Skills 中定义临时 Hooks
+Commands 和 Skills 可以在 frontmatter 中包含临时 Hooks（仅在该命令 / 技能执行期间有效）。
+```
+---
+description: Deploy with safety checks
+hooks:
+  - event: PreToolUse
+    matcher: Bash
+    command: |
+      if [[ "$TOOL_INPUT" == *"production"* ]]; then
+        echo "Production deployment detected" >&2
+      fi
+  - event: PostToolUse
+    matcher: Edit
+    command: npx prettier --write "$FILE_PATH"
+    once: true
+---
+
+Deploy the application to staging environment.
+```
+
+once: true  表示 Hook 只触发一次。这适合“完成后运行一次测试”这类不需要重复执行的场景。注意  once  仅在 Skill 中可用，子代理中不支持。
+
+## 子代理 frontmatter 内置 Hooks——比全局配置更精准的方案
+
+考虑这个场景：你有一个  db-reader  子代理，它可以执行 SQL 查询。你想在它每次执行 Bash 命令前检查 SQL 注入风险。
+
+### 方案一：全局 settings.json
+```
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/check-sql-injection.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+问题来了：所有 Bash 命令都会被 SQL 注入检查——包括  npm install、git status、ls -la  这些和 SQL 毫无关系的命令。这既浪费性能（每次 Bash 命令多执行一个脚本），又可能误拦截（脚本中某个字符串碰巧匹配了 SQL 注入模式）。
+
+### 方案二：子代理 frontmatter Hooks
+
+```
+---
+name: db-reader
+description: Read-only database explorer for analyzing data patterns
+tools: Read, Grep, Glob, Bash
+permissionMode: plan
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "./hooks/check-sql-injection.sh"
+  Stop:
+    - hooks:
+        - type: prompt
+          prompt: "Check if any query results contain PII (names, emails, phone numbers). If so, respond with {\"ok\": false, \"reason\": \"Results may contain PII, please redact before returning\"}."
+---
+
+You are a database analysis specialist. Execute read-only SQL queries to help understand data patterns.
+
+## Rules
+- ONLY execute SELECT queries
+- NEVER use INSERT, UPDATE, DELETE, DROP, or any data-modifying SQL
+- Limit results to 100 rows unless explicitly requested
+```
+这样做，SQL 注入检查只在  db-reader  子代理的 Bash 命令上触发。主会话和其他子代理的 Bash 命令完全不受影响。
+
+frontmatter Hooks 的关键规则：
+支持所有事件类型：PreToolUse、PostToolUse、Stop 等都可以用。
+Stop 会自动转换为 SubagentStop：在子代理 frontmatter 中定义的  Stop Hook，实际触发的是  SubagentStop  事件——因为子代理完成时触发的是 SubagentStop 而非 Stop。
+生命周期绑定：Hook 在子代理启动时激活，子代理完成时自动清理。
+格式与 settings.json 一致：YAML 格式，但字段名和结构完全相同。
+
+```
+---
+name: deploy-checker
+description: Verify deployment readiness with safety checks
+tools: Read, Grep, Glob, Bash
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: |
+            INPUT=$(cat)
+            CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+            # 阻止任何直接操作生产环境的命令
+            if echo "$CMD" | grep -qi "production\|prod-db\|deploy.*--force"; then
+              echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Direct production operations are not allowed in this agent. Use the deployment pipeline instead."}}'
+            fi
+  Stop:
+    - hooks:
+        - type: agent
+          prompt: "Review the deployment check results. Verify that: 1) All health checks pass 2) No breaking API changes detected 3) Database migrations are backward-compatible. $ARGUMENTS"
+          timeout: 60
+---
+
+You are a deployment readiness checker...
+```
+这个子代理有两层保护。PreToolUse Hook  用确定性规则阻止直接操作生产环境的命令，这是“硬规则”，不需要判断力，只需要模式匹配。Stop Hook（实际触发为 SubagentStop）用 Agent 类型验证部署检查结果——这需要判断力和代码检查能力，所以用了最强的 Agent 类型。
+
+## 什么时候用 frontmatter Hooks vs 全局 Hooks？
+判断流程很简单：
+```
+判断流程：
+├── 这个 Hook 是否只与特定子代理相关？
+│   ├── 是 → frontmatter Hooks
+│   │   例：db-reader 的 SQL 注入检查、deploy-checker 的生产环境保护
+│   └── 否 → 全局 settings.json
+│       例：所有 Write 操作后的格式化、所有 Bash 命令的危险命令拦截
+│
+├── 这个 Hook 是否需要随子代理定义一起分发？
+│   ├── 是 → frontmatter Hooks
+│   │   例：开源项目中的子代理，使用者不需要额外配置 settings.json
+│   └── 否 → 全局 settings.json
+│
+└── 这个 Hook 是否需要在子代理外也生效？
+    ├── 是 → 全局 settings.json
+    └── 否 → frontmatter Hooks
+```
+
+## 调试技巧
+
+Hook 脚本出问题时，调试手段和普通 Shell 脚本有所不同，因为 Hook 的 stdin/stdout 都有特殊用途。
+
+### 1. 使用 stderr 输出调试信息
+```
+# 调试信息输出到 stderr（不影响 JSON 响应）
+echo "DEBUG: Processing file $FILE_PATH" >&2
+
+# 正常输出到 stdout
+echo '{"decision": "allow"}'
+```
+记住，stdout 是给 Claude 读的 JSON，stderr 是给你看的调试信息。混淆两者是 Hook 开发中最常见的错误。
+
+### 2. 手动测试 Hook 脚本
+不需要启动 Claude 就能测试你的 Hook——手动构造 JSON 输入，通过管道传给脚本：
+```
+# 创建测试输入
+echo '{
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rm -rf /tmp/test"
+  }
+}' | ./hooks/block-dangerous.sh
+
+# 检查退出码
+echo "Exit code: $?"
+```
+这让你能在开发过程中快速迭代——修改脚本、手动测试、检查输出，不需要每次都等 Claude 触发。 
+
+### 3. 使用claude --debug查看完整执行细节
+```
+[DEBUG] Executing hooks for PostToolUse:Write
+[DEBUG] Found 1 hook matchers in settings
+[DEBUG] Matched 1 hooks for query "Write"
+[DEBUG] Hook command completed with status 0: <stdout output>
+```
+也可以在会话中用  Ctrl+O  切换详细模式（verbose mode），在对话记录中查看 Hook 的输出。
+
+### 4. 常见问题排查清单
+Hook 不触发：检查 matcher 是否正确（区分大小写）；如果直接编辑了 settings 文件，需要在  /hooks  菜单中确认或重启会话才能生效。
+权限问题：确保脚本有执行权限——chmod +x hooks/*.sh
+
+JSON 解析错误：确保输出是有效 JSON。注意：如果你的 shell profile。（~/.zshrc  或  ~/.bashrc）中有无条件的  echo  语句，它会污染 stdout 导致 。JSON 解析失败。解决方法是用  [[ $- == *i* ]]  包裹 echo，只在交互式 shell 中输出。
+Stop Hook 死循环：检查是否遗漏了  stop_hook_active  判断（参见前面的"防止死循环"一节）。
+
+## 异步 Hook：后台执行不阻塞
+默认情况下，Hook 会阻塞 Claude 的执行直到完成。这在大多数场景下是合理的——安全检查必须在操作前完成，格式化必须在下一步操作前完成。但对于耗时操作（运行完整测试套件、发送通知、调用外部 API），阻塞会显著拖慢 Claude 的响应速度。
+
+async: true  让 Hook 在后台运行，不阻塞主流程：
+```
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/run-tests-async.sh",
+            "async": true,
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+你需要知道异步 Hook 的三个限制。
+只有  type: "command"  支持异步，prompt 和 agent 类型不支持——因为它们需要实时影响 Claude 的决策。
+
+异步 Hook 不能阻止操作，因为操作在 Hook 完成前就已经继续了
+
+Hook 完成后的输出会在下一个对话轮次传递给 Claude，这是有延迟的。
+
+所以异步 Hook 适合“我不需要立即知道结果”的场景，在后台跑测试、发送 Slack 通知、写日志到远程服务。
+
+## HTTP Hook：对接外部服务
+前面讲的 command、prompt、agent 三种 Hook 类型，执行逻辑都在本地——要么跑脚本，要么调 LLM。但有些场景下，Hook 的处理逻辑不在本地，而是在一个远程服务上：团队共享的审计服务、集中式的安全扫描平台、公司内部的合规检查 API。
+这时候就该用  type: "http"。HTTP Hook 把事件数据以 POST 请求发送到指定 URL，由远程服务处理后返回决策结果。
+
+```
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8080/hooks/tool-use",
+            "headers": {
+              "Authorization": "Bearer $MY_TOKEN"
+            },
+            "allowedEnvVars": ["MY_TOKEN"]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+远程服务收到的 JSON 和 command Hook 从 stdin 读到的完全一样。返回的响应体也遵循相同的 JSON 格式——要阻止工具调用，在响应体里返回对应的  hookSpecificOutput  字段即可。注意：HTTP 状态码（如 403）不能阻止操作，必须在 2xx 响应体里用 JSON 表达决策。 headers  中的值支持  $VAR_NAME  语法做环境变量插值，但只有  allowedEnvVars  列表中的变量才会被解析，其他  $VAR  引用会保持为空。这是一个安全设计——防止意外泄露环境变量。
+HTTP Hook 有一个限制，目前只能通过手动编辑 settings JSON 来配置，/hooks  交互菜单暂不支持添加 HTTP 类型。
+
+选择原则不变：能用 command 解决的不要用 prompt，能用 prompt 解决的不要用 agent，需要对接远程服务时用 http。
+
+## 安全最佳实践
+使用绝对路径引用脚本：用  "$CLAUDE_PROJECT_DIR"/.claude/hooks/xxx.sh，比相对路径更可靠。相对路径在子代理中可能解析到错误的目录。
+最小权限原则：PreToolUse 只检查必要的条件。检查越多，误拦截的概率越高，用户绕过 Hook 的冲动也越强。
+
+快速失败：Hook 应该快速返回，避免长时间阻塞。如果确实需要耗时操作，用  async: true。
+
+优雅降级：格式化工具不存在时应跳过而不是报错。Hook 的失败不应该阻碍正常工作流。
+输入校验：永远不要盲目信任 stdin 输入，用  jq  解析并验证。
+引号包裹变量：使用  "$VAR"  而非  $VAR，防止路径中的空格导致问题。
+路径遍历防护：检查文件路径中是否有  ..，防止恶意路径逃逸。
+
+# Hook 工程设计方法论
+面对一个具体需求，如何系统地设计 Hook 方案？
+## 三维决策框架
+设计一个 Hook 方案，我们需要想清楚三个问题。
+![alt text](image-2.png)
+三个维度两两正交——你可以在任何事件上使用任何类型的 Hook，配置在任何位置。但能做不等于应该做。好的工程设计是在这三个维度上找到最恰当的交叉点——用最轻量的类型解决问题，在最小的作用域内生效。
+
+## Hook + SubAgent 组合模式
+Hooks 和 SubAgent 是两个独立的机制，但组合使用时能产生强大的协同效果。
+![alt text](image-3.png)
+这三层保护各司其职：
+frontmatter Hook：子代理内部的自检，检测我的输出完整是否完整。
+SubagentStart Hook：外部注入，给它必要的上下文。
+SubagentStop Hook：外部验收，判断它的工作是否达标。
+内部自检发现的是“自己知道自己漏了什么”的问题，外部验收发现的是“它觉得完成了，但其实不够好”的问题。两者视角不同，互为补充。
