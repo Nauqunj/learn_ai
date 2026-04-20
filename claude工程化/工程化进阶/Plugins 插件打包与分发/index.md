@@ -912,3 +912,4 @@ tools: Read, Write, Edit, Bash, Task
 ## 安装例子
 /plugin marketplace add https://github.com/Nauqunj/L_marketplace.git
 /plugin install L_dev_pipeline
+/plugin marketplace update L_marketplace
