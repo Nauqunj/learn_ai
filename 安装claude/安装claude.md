@@ -36,7 +36,7 @@ irm https://claude.ai/install.ps1 | iex
 npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com
 npm config set save-exact true  // 锁定包版本
 npm install -g @anthropic-ai/claude-code@2.1.109 --registry=https://registry.npmmirror.com -f
-
+npm install -g --save-exact @anthropic-ai/claude-code@2.1.109 --registry=https://registry.npmmirror.com -f
 claude update
 
 Claude –version
