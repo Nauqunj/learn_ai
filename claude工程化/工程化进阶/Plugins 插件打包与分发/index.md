@@ -908,3 +908,7 @@ tools: Read, Write, Edit, Bash, Task
 
 版本管理——使用语义化版本（Semantic Versioning），让用户清楚每次更新的影响范围。
 
+
+## 安装例子
+/plugin marketplace add https://github.com/Nauqunj/L_marketplace.git
+/plugin install L_dev_pipeline
