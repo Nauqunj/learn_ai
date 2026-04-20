@@ -240,3 +240,10 @@ Trae安装插件
 vscode 安装插件
 安装 Claude Code Yolo 插件
 打开 VS Code，在扩展市场搜索并安装 Claude code yolo（请搜索全称）。这个魔改版插件允许在 UI 界面中直接配置第三方模型参数。
+
+
+"env": {
+    "DISABLE_AUTOUPDATER": "1"    // 设为 "1" 禁用自动更新，"0" 或删除该行则恢复自动更新
+  }
+
+  禁止自动更新
