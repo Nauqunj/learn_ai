@@ -1,0 +1,125 @@
+1. 安装fnm
+winget install Schniz.fnm
+
+2. 安装opencode
+npm install -g opencode-ai
+opencode --version // 查看版本号
+
+# 启动交互式TUI界面（主使用方式）
+opencode
+
+/connect    绑定模型 API
+
+项目初始化 /init
+
+自定义模型：
+设置为全局 ~/.config/opencode/opencode.json
+## 如果你想【同时保留 CanopyWave + DeepSeek 两个服务商】
+
+写在同一个 `opencode.json` 里：
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "myprovider": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Canopy Wave",
+      "options": {
+        "baseURL": "https://inference.canopywave.io/v1",
+        "headers": {
+          "Authorization": "Bearer 你的canopy密钥"
+        }
+      },
+      "models": {
+        "zai/glm-4.7": {
+          "name": "glm47"
+        }
+      }
+    },
+    "custom-deepseek": {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "DeepSeek",
+        "options": {
+          "baseURL": "https://api.deepseek.com/v1",
+          "headers": {
+            "Authorization": "Bearer 你的deepseek密钥"
+          }
+        },
+        "models": {
+          "deepseek-flash": {
+            "name": "deepseek-flash"
+          },
+          "deepseek-v3": {
+            "name": "deepseek-v3"
+          },
+          "deepseek-v3.1":{
+            "name": "deepseek-v3.1"
+          },
+          "deepseek-v4-flash":{
+            "name": "deepseek-v4-flash"
+          },
+          "deepseek-v4-pro":{
+            "name": "deepseek-v4-pro"
+          },
+          "deepseek-v4.1-flash":{
+            "name": "deepseek-v4.1-flash"
+          },
+        }
+    }
+  }
+}
+
+```
+
+# SDD开发流程
+> 仓库主页：[https://github.com/mattpocock/skills](https://github.com/mattpocock/skills)
+> 核心定位：**给 AI 编码代理的工程纪律技能包，拒绝 vibe coding（凭感觉写代码）**，一套可以跑在 OpenCode / Claude Code / Cursor / Cline 等支持 Skill 标准的工具上博客园
+安装全技能包
+npx skills@latest add mattpocock/skills -a opencode
+
+单独安装指定技能
+
+# 只装 grill-me + setup
+npx skills@latest add mattpocock/skills --skill=grill-me,setup-matt-pocock-skills -a opencode
+
+npx skills@latest add mattpocock/skills/grill-me -a
+opencodemattpocock/skills # 交互选 grill-me + setup-matt-pocock-skills
+/setup-matt-pocock-skills # 每个 repo 跑一次,tracker 选Local markdown
+ls ~/.agents/skills/grill-me/SKILL.md
+
+升级已安装技能
+npx skills@latest update
+
+项目初始化（必做，每个 repo 只跑一次）
+/setup-matt-pocock-skills
+
+核心技能完整使用流程
+想法模糊 → /grill-me 或者 /grill-with-docs → 对齐需求 → /to-spec 生成规格文档 → /to-tickets 拆成任务 → /tdd 测试驱动开发 → /code-review 评审
+
+1. /grill-me（纯需求拷问，无文档）
+2. /grill-with-docs（正式工程开发首选）
+后续配套技能
+命令	作用
+/to-spec	把刚刚 grill 聊清楚的对话，生成一份正式需求规格文档 spec
+/to-tickets	把 spec 拆成带阻塞依赖关系的开发任务（ticket），本地 md 或者 GitHub issue
+/tdd	测试驱动开发：先写失败测试，再写最小代码通过测试
+/implement	根据 spec/tickets 自动执行开发，内置 tdd + code-review
+/code-review	代码评审，找边界问题、漏洞、不符合规范的地方
+/diagnosing-bugs	专项 bug 排查流程
+/wayfinder	超大任务的长周期规划，跨多轮会话保存进度
+/triage	缺陷分级、定位根因
+/writing-great-skills 	编写好的技能，帮助你更高效地完成任务
+/writing-for-agents	编写好的技能，帮助你更高效地完成任务
+
+卸载某个技能：
+npx skills@latest remove grill-me、
+
+多agent实现流程
+通过sdd开发
+1. 先编写多个agent
+2. 再写多个skill
+3. 再写hook校验
+4. 编写统一模型客户端
+5. 编写流水线pipeline
+6. 添加数据源，数据来源
+7. 编写mcp sever层

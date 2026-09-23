@@ -1,6 +1,6 @@
 {
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "sk-mr-6e78510018d8bb895b5d75564cc3737e",
+    "ANTHROPIC_AUTH_TOKEN": "",
     "ANTHROPIC_BASE_URL": "https://metarouter-ai.xiaoe-tools.com/api/anthropic",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "zhipu/glm-5-turbo",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "zhipu/glm-5-turbo",
