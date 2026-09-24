@@ -117,9 +117,518 @@ npx skills@latest remove grill-me、
 多agent实现流程
 通过sdd开发
 1. 先编写多个agent
+  请帮我创建 .opencode/agents/collector.md 文件，定义一个知识采集 Agent。
+  要求：
+  - 角色：AI 知识库助手的采集 Agent，从 GitHub Trending 和 Hacker News 采集技术动
+  - 允许权限：Read, Grep, Glob, WebFetch（只看只搜不写）
+  - 禁止权限：Write, Edit, Bash（并说明为什么禁止）
+  - 工作职责：搜索采集、提取标题/链接/热度/摘要、初步筛选、按热度排序
+  - 输出格式：JSON 数组，每条含 title, url, source, popularity, summary
+  - 质量自查清单：条目>=15、信息完整、不编造、中文摘要
+
+  参考 .opencode/agents/collector.md 的格式，帮我创建另外两个 Agent 定义文件：
+    1. .opencode/agents/analyzer.md — 分析 Agent
+  - 权限同 collector（Read/Grep/Glob/WebFetch，禁止 Write/Edit/Bash）
+  - 职责：读取 knowledge/raw/ 的数据，写摘要、提亮点、打评分(1-10)、建议标签
+  - 评分标准：9-10 改变格局，7-8 直接有帮助，5-6 值得了解，1-4 可略过
+  2. .opencode/agents/organizer.md — 整理 Agent
+  - 权限：允许 Read/Grep/Glob/Write/Edit，禁止 WebFetch/Bash
+  - 职责：去重检查、格式化为标准 JSON、分类存入 knowledge/articles/
+  - 文件命名规范：{date}-{source}-{slug}.json
+
+
 2. 再写多个skill
+    请帮我创建 .opencode/skills/github-trending/SKILL.md 文件。
+    格式要求：
+    - 头部用 YAML frontmatter（name, description, allowed-tools）
+    - 正文用 Markdown，包含：使用场景、执行步骤（7步）、注意事项、输出格式
+    内容要求：
+    - name: github-trending
+    - description: 当需要采集 GitHub 热门开源项目时使用此技能
+    - allowed-tools: Read, Grep, Glob, WebFetch
+    - 7个执行步骤：搜索热门仓库(GitHub API) → 提取信息 → 过滤(纳入AI/LLM/Agent，排除
+    - JSON结构包含：source, skill, collected_at, items数组(name, url, summary,
+
+    参考 .opencode/skills/github-trending/SKILL.md 的格式，
+    帮我创建 .opencode/skills/tech-summary/SKILL.md。
+    - name: tech-summary
+    - description: 当需要对采集的技术内容进行深度分析总结时使用此技能
+    - allowed-tools: Read, Grep, Glob, WebFetch
+    - 4个执行步骤：
+    1. 读取 knowledge/raw/ 最新采集文件
+    2. 逐条深度分析（摘要<=50字、技术亮点2-3个用事实说话、评分1-10附理由、标签建议）
+    3. 趋势发现（共同主题、新概念）
+    4. 输出分析结果 JSON
+    - 评分标准：9-10改变格局, 7-8直接有帮助, 5-6值得了解, 1-4可略过
+    - 约束：15个项目中9-10分不超过2个
+
+    @collector 请调用 github-trending 技能，按照 .opencode/skills/github-trendi
+    搜索完成后把 JSON 数据保存到 knowledge/raw/github-trending-今天日期.json
+
+    @analyzer 请调用 tech-summary 技能，读取 knowledge/raw/ 中最新的采集数据，
+    按照 .opencode/skills/tech-summary/SKILL.md 的 4 个步骤进行深度分析。
+    输出分析结果。
+
+    @organizer 将上面的分析结果整理为标准知识条目：
+    1. 与 knowledge/articles/ 已有条目做去重检查
+    2. 格式化为标准 JSON（包含 id, title, source_url, summary, tags, status 字段
+    3. 每个条目单独存为 knowledge/articles/{date}-{source}-{slug}.json
+
 3. 再写hook校验
+    请帮我编写一个 Python 脚本 hooks/validate_json.py，用于校验知识条目 JSON 文件：
+    需求：
+    1. 支持单文件和多文件（通配符 *.json）两种输入模式
+    2. 检查 JSON 是否能正确解析
+    3. 必填字段使用 dict[str, type] 格式，同时校验字段存在性和类型：
+    id(str), title(str), source_url(str), summary(str), tags(list), statu
+    4. 检查 ID 格式是否为 {source}-{YYYYMMDD}-{NNN}（如 github-20260317-001）
+    5. 检查 status 是否为 draft/review/published/archived 之一
+    6. 检查 URL 格式（https?://...）
+    7. 检查摘要最少 20 字、标签至少 1 个
+    8. 检查 score（如有）是否在 1-10 范围，audience（如有）是否为 beginner/intermed
+    9. 命令行用法：python hooks/validate_json.py <json_file> [json_file2 ...]
+    10. 校验通过 exit 0，失败 exit 1 + 错误列表 + 汇总统计
+    编码规范：遵循 PEP 8，使用 pathlib，不依赖第三方库
+
+    请帮我编写一个 Python 脚本 hooks/check_quality.py，用于给知识条目做 5 维度质量评
+    需求：
+    1. 支持单文件和多文件（通配符 *.json）两种输入模式
+    2. 使用 dataclass 定义 DimensionScore 和 QualityReport 结构
+    3. 5 个评分维度及满分（加权总分 100 分）：
+    - 摘要质量 (25 分)：>= 50 字满分，>= 20 字基本分，含技术关键词有奖励
+    - 技术深度 (25 分)：基于文章 score 字段（1-10 映射到 0-25）
+    - 格式规范 (20 分)：id、title、source_url、status、时间戳五项各 4 分
+    - 标签精度 (15 分)：1-3 个合法标签最佳，有标准标签列表校验
+    - 空洞词检测 (15 分)：不含"赋能""抓手""闭环""打通"等空洞词
+    4. 空洞词黑名单分中英两组：
+    - 中文：赋能、抓手、闭环、打通、全链路、底层逻辑、颗粒度、对齐、拉通、沉淀、强大的、
+    - 英文：groundbreaking、revolutionary、game-changing、cutting-edge 等
+    5. 输出可视化进度条 + 每维度得分 + 等级 A/B/C
+    6. 等级标准：A >= 80, B >= 60, C < 60
+    7. 退出码：存在 C 级返回 1，否则返回 0
+    编码规范：遵循 PEP 8，使用 pathlib 和 dataclass，不依赖第三方库
+
 4. 编写统一模型客户端
+    请帮我编写一个 Python 模块 pipeline/model_client.py，作为统一的 LLM 调用客户端
+    需求：
+    1. 支持 DeepSeek、Qwen、OpenAI 三种模型提供商
+    2. 通过环境变量切换：LLM_PROVIDER（默认 deepseek）、对应的 API_KEY
+    3. 使用 httpx 直接调用 OpenAI 兼容 API（不依赖 openai SDK）
+    4. 用抽象基类 LLMProvider 定义接口，OpenAICompatibleProvider 实现
+    5. 统一返回 LLMResponse dataclass，包含 content 和 Usage 用量统计
+    6. 包含带重试的 chat_with_retry() 函数（3次，指数退避）和 60 秒超时
+
 5. 编写流水线pipeline
+    请帮我编写 pipeline/pipeline.py，一个四步知识库自动化流水线：
+    需求：
+    1. Step 1: 采集（Collect）— 从 GitHub Search API 和 RSS 源采集 AI 相关内容
+    2. Step 2: 分析（Analyze）— 调用 LLM 对每条内容进行摘要/评分/标签分析
+    3. Step 3: 整理（Organize）— 去重 + 格式标准化 + 校验
+    4. Step 4: 保存（Save）— 将文章保存为独立 JSON 文件到 knowledge/articles/
+    CLI 设计：
+    - python pipeline/pipeline.py --sources github,rss --limit 20 # 完整流水
+    - python pipeline/pipeline.py --sources github --limit 5 # 只采集
+    - python pipeline/pipeline.py --sources rss --limit 10 # 只采集
+    - python pipeline/pipeline.py --sources github --limit 5 --dry-run # 干跑
+    - python pipeline/pipeline.py --verbose # 详细日
+    关键约束：
+    - 采集层用 httpx 发 HTTP 请求，RSS 用简易正则解析
+    - 分析层调用 model_client 的 chat_with_retry()（需要 API Key）
+    - 采集数据存入 knowledge/raw/，最终文章存入 knowledge/articles/
+    - model_client 在同目录下，用 from model_client import create_provider, cha
+    编码规范：遵循 PEP 8，用 argparse 解析参数，用 pathlib 处理路径
+
 6. 添加数据源，数据来源
+    请帮我创建 pipeline/rss_sources.yaml，配置知识库的 RSS 数据源：
+    需求：
+    1. YAML 格式，每个源包含 name、url、category、enabled 字段
+    2. 包含以下分类的数据源：
+    - 综合技术：Hacker News Best (AI 相关)、Lobsters AI/ML
+    - AI 研究：arXiv cs.AI
+    - 公司博客：OpenAI Blog、Anthropic Research、Hugging Face Blog
+    - 中文社区：机器之心、量子位（默认 disabled，需确认 RSS 可用性）
+    3. 每个源的 enabled 字段控制是否采集
+    4. 量太大的源默认设为 enabled: false
 7. 编写mcp sever层
+    请帮我写一个 MCP Server（mcp_knowledge_server.py），让 AI 工具可以搜索本地知识库
+    需求：
+    1. 读取 knowledge/articles/ 目录下的所有 JSON 文件
+    2. 提供 3 个 MCP 工具：
+    - search_articles(keyword, limit=5): 按关键词搜索文章标题和摘要
+    - get_article(article_id): 按 ID 获取文章完整内容
+    - knowledge_stats(): 返回统计信息（文章总数、来源分布、热门标签）
+    3. 使用 JSON-RPC 2.0 over stdio 协议
+    4. 支持 MCP initialize、tools/list、tools/call 方法
+    5. 无第三方依赖，只用 Python 标准库
+    文章 JSON 格式参考：
+    {
+    "id": "github-20260326-001",
+    "title": "langgenius/dify",
+    "source": "github",
+    "summary": "...",
+    "score": 7,
+    "tags": ["agent", "llm"]
+    }
+8. 生成githup workflow 文件.工作流。每天几点调用，支持手动触发，添加权限，安装依赖，支持多个密钥，采集后校验文章，自动提交新采集文章
+9. 设置GitHub Secrets Settings 标签 左侧菜单：Secrets and variables → Actions  点击 New repository secret，逐个添加：
+    Secret 名称 值 必填
+    DEEPSEEK_API_KEY 你的 DeepSeek API Key（sk-...） 是
+    LLM_PROVIDER deepseek 是
+    QWEN_API_KEY 你的 Qwen API Key（如果用 Qwen） 否
+    手动触发测试
+    1. 打开 GitHub 仓库页面
+    2. 点击顶部 Actions 标签
+    3. 左侧选择 Daily Knowledge Collection
+    4. 点击 Run workflow -> Run workflow
+    9.1 配置本地定时任务
+    请帮我写两条 crontab 配置：
+    1. 每天早上 8 点自动运行 pipeline 的 Step 1-2（免费采集）
+    命令：cd ~/ai-knowledge-base && python pipeline/pipeline.py --step 1 -
+    日志追加到 logs/collect.log
+    2. 每周日上午 10 点运行 Step 3-4（AI 分析入库）
+    命令：cd ~/ai-knowledge-base && python pipeline/pipeline.py --step 3 -
+    日志追加到 logs/analyze.log
+    要求：标准 crontab 格式，包含注释说明、
+
+    9.2  方案 B：Windows -- Task Scheduler
+    请帮我写一个 Windows 批处理脚本 run_collect.bat，用于定时采集知识库：
+    - 切换到项目目录 C:\Users\你的用户名\ai-knowledge-base
+    - 运行 python pipeline\pipeline.py --step 1 --step 2
+    - 日志追加到 logs\collect.log
+
+10. AI 编程工具生成 CostTracker 成本控制
+    请帮我在 pipeline/model_client.py 中添加 CostTracker 功能：
+    需求：
+    1. 创建一个 CostTracker 类，追踪 LLM 调用的 token 消耗和成本
+    2. 包含国产模型价格表（单位：元/百万 tokens）：
+    - deepseek: 输入 1, 输出 2
+    - qwen: 输入 4, 输出 12
+    - openai (gpt-4o-mini): 输入 150, 输出 600
+    3. CostTracker 方法：
+    - record(usage, provider): 记录一次 API 调用
+    - estimated_cost(provider): 返回估算成本（元）
+    - report(provider): 打印成本报告
+    4. 在 chat() 函数中，每次调用成功后自动 record
+    5. 创建全局 tracker 实例，Pipeline 结束时可以调 tracker.report()
+    编码规范：遵循 PEP 8，Google 风格 docstring
+
+    - CostTracker：record(usage, provider)、estimated_cost(provider=None)、report(provider=None)，价格表 CNY_PRICE_TABLE（deepseek 1/2、qwen 4/12、openai 150/600，元/百万 tokens）。
+    - chat() 成功后自动 cost_tracker.record(...)；全局实例 cost_tracker。
+    - pipeline.py 在流水线结束调用 cost_tracker.report()。
+以上是githup流水线
+11. 实现 Router 路由模式
+把pipeline的model_client.py，搬到workflows下面
+用 AI 编程工具生成 router.py
+    请帮我编写 patterns/router.py，实现 Router 路由模式：
+    需求：
+    1. 两层意图分类策略：
+    - 第一层：关键词快速匹配（零成本，不调 LLM）
+    - 第二层：LLM 分类兜底（处理模糊意图）
+    2. 三种意图：github_search / knowledge_query / general_chat
+    3. 每种意图对应一个处理器函数
+    4. github_search 调用 GitHub Search API (urllib.request)；query 参数必须用
+    5. knowledge_query 从本地 knowledge/articles/index.json 检索
+    6. general_chat 调用 LLM 直接回答
+    7. 统一入口函数 route(query) -> str
+    8. 包含 if __name__ == "__main__" 测试入口
+    依赖：使用 workflows/model_client.py 的 chat() 和 chat_json() 函数
+    chat() 返回 (text, usage) 元组
+
+12. 用 AI 编程工具生成 supervisor.py
+    请帮我编写 patterns/supervisor.py，实现 Supervisor 监督模式：
+    需求：
+    1. Worker Agent：接收任务，输出 JSON 格式的分析报告
+    2. Supervisor Agent：对 Worker 的输出进行质量审核
+    - 评分维度：准确性(1-10)、深度(1-10)、格式(1-10)
+    - 输出 JSON: {"passed": bool, "score": int, "feedback": str}
+    3. 审核循环：
+    - 通过（score >= 7）→ 返回结果
+    - 不通过 → 带反馈重做（最多 3 轮）
+    - 超过 3 轮 → 强制返回 + 警告
+    4. 函数签名：supervisor(task: str, max_retries: int = 3) -> dict
+    5. 返回值包含：output, attempts, final_score, warning(可选)
+    6. 包含 if __name__ == "__main__" 的测试入口
+    依赖：使用 workflows/model_client.py 的 chat() 函数
+    chat() 返回 (text, usage) 元组
+
+13. 定义 KBState 状态
+    pip install langgraph
+13.1 用 AI 编程工具生成 state.py
+    请帮我编写 workflows/state.py，定义 LangGraph 工作流的共享状态：
+    需求：
+    1. 使用 TypedDict 定义 KBState 类
+    2. 包含以下字段：
+    - sources: list[dict] — 采集到的原始数据
+    - analyses: list[dict] — LLM 分析后的结构化结果
+    - articles: list[dict] — 格式化、去重后的知识条目
+    - review_feedback: str — 审核反馈意见
+    - review_passed: bool — 审核是否通过
+    - iteration: int — 当前审核循环次数（最多 3 次）
+    - cost_tracker: dict — Token 用量追踪
+    3. 每个字段加中文注释说明用途和数据格式
+    4. 遵循"报告式通信"原则：字段是结构化摘要，不是原始数据
+
+14. 用 AI 编程工具生成 nodes.py
+
+    请帮我编写 workflows/nodes.py，定义 LangGraph 工作流的 5 个节点函数：
+    需求：
+    1. 每个节点是纯函数：接收 KBState，返回 dict（部分状态更新）
+    2. 节点列表：
+    - collect_node: 调用 GitHub Search API 采集 AI 相关仓库（urllib.request）
+    - analyze_node: 用 LLM 对每条数据生成中文摘要、标签、评分
+    - organize_node: 过滤低分条目(< 0.6)、按 URL 去重、如有审核反馈则用 LLM 修正
+    - review_node: LLM 四维度评分（摘要质量/标签准确/分类合理/一致性），iteration
+    - save_node: 将 articles 写入 knowledge/articles/ 目录的 JSON 文件
+    3. 使用 workflows/model_client.py 的 chat() 和 chat_json() 函数
+    - chat(prompt, system=...) 返回 (text, usage)
+    - chat_json(prompt, system=...) 返回 (parsed_json, usage)
+    - accumulate_usage(tracker, usage) 累加 token 统计
+    4. 使用 workflows/state.py 的 KBState
+    5. 每个节点开头打印 [NodeName] 日志
+    关键设计点：
+    - review_node 的审核 prompt 要求输出 JSON: {"passed": bool, "overall_score"
+    - organize_node 在 iteration > 0 且有 feedback 时，调用 LLM 做定向修改
+    - save_node 同时更新 index.json 索引文件
+
+15. 用 AI 编程工具生成 graph.py
+    请帮我编写 workflows/graph.py，组装 LangGraph 工作流：
+    需求：
+    1. 使用 langgraph.graph 的 StateGraph, END
+    2. 导入 workflows/nodes.py 的 5 个节点函数
+    3. 导入 workflows/state.py 的 KBState
+    4. 线性边: collect → analyze → organize → review
+    5. 条件边: review 之后根据 review_passed 分支
+    - True → save → END
+    - False → organize (回到整理节点修正)
+    6. 入口点: collect
+    7. build_graph() 函数返回编译后的 app
+    8. if __name__ == "__main__" 流式执行并打印每个节点的关键输出
+    注意：使用真实的 LangGraph API：
+    - StateGraph(KBState)
+    - graph.add_node("name", function)
+    - graph.add_edge("a", "b")
+    - graph.add_conditional_edges("source", router_fn, {"key": "target"})
+    - graph.set_entry_point("name")
+    - graph.add_edge("save", END)
+    - graph.compile()
+
+    运行测试
+    cd ~/ai-knowledge-base
+    python workflows/graph.py
+
+16. 用 AI 编程工具修改 review_node
+    请帮我修改 workflows/nodes.py 中的 review_node 函数，用于测试审核循环：
+    需求：
+    1. 前 2 次审核强制返回 review_passed: False（模拟审核不通过）
+    2. 第 3 次审核（iteration >= 2）返回 review_passed: True
+    3. 每次审核都给出不同的 feedback 内容
+    4. 打印当前 iteration 和 review_passed 值
+    这是临时测试代码，验证后会改回 LLM 审核版本。
+
+
+    # 临时测试：把 review_node 改为 review_node_test
+    from workflows.nodes import (
+    analyze_node, collect_node, organize_node,
+    review_node_test, # 改这里
+    save_node,
+    )
+    # graph.add_node("review", review_node) # 注释掉
+    graph.add_node("review", review_node_test) # 用测试版
+
+17. 实现Reviewer-Agent
+用 AI 编程工具生成 review_node 正式版
+    请帮我编写 workflows/reviewer.py 中的 review_node 函数：
+    需求：
+    1. Reviewer 审核的对象是 state["analyses"]（不是 articles，articles 在 organ
+    2. 5 维度评分，每维 1-10 分，权重如下：
+    - summary_quality (摘要质量): 25%
+    - technical_depth (技术深度): 25%
+    - relevance (相关性): 20%
+    - originality (原创性): 15%
+    - formatting (格式规范): 15%
+    3. 用代码重算加权总分（不要信任模型算术）
+    4. 加权总分 >= 7.0 为通过
+    5. 只审核前 5 条 analyses（控 token 消耗）
+    6. temperature=0.1（评分一致性）
+    7. LLM 调用失败时自动通过（不阻塞流程）
+    8. 返回 {review_passed, review_feedback, iteration, cost_tracker}
+    依赖：
+    - chat_json(prompt, system=..., temperature=...) 返回 (parsed_json, usage
+    - accumulate_usage(tracker, usage)
+    - KBState 的 plan, analyses, iteration, cost_tracker 字段
+
+18. 确保 graph.py 使用 review_node
+    from workflows.reviewer import review_node
+    graph.add_node("review", review_node)
+    graph.add_edge("analyze", "review") # 分析完后进入审核
+
+19. 完整审核修正循环
+创建 reviser.py
+    请帮我编写 workflows/reviser.py 中的 revise_node 函数：
+    需求：
+    1. 读 state["analyses"] 和 state["review_feedback"]
+    2. 把 feedback 注入修改 prompt
+    3. 调 LLM 返回修改后的 analyses 列表
+    4. temperature=0.4（允许创造性改写）
+    5. analyses 或 feedback 空时跳过（返回 {}）
+    6. 返回 {"analyses": improved, "cost_tracker": tracke
+
+20. 创建 human_flag.py
+    循环必须有出口。超过 max_iterations 还没通过，说明问题不在“质量”而在“数
+    据”—— 需要人工判断。HumanFlag 节点把问题条目写到独立目录，不污染主知识库。
+    """HumanFlag Agent — 人工介入节点（异常终点）"""
+    import json
+    import os
+    from datetime import datetime, timezone
+    from workflows.state import KBState
+    def human_flag_node(state: KBState) -> dict:
+    """审核循环超过上限时的兜底 —— 写入 pending_review/ 目录"""
+    analyses = state.get("analyses", [])
+    iteration = state.get("iteration", 0)
+    feedback = state.get("review_feedback", "")
+    print(f"[HumanFlag] ⚠️ 达到 {iteration} 次审核仍未通过")
+    print(f"[HumanFlag] 最后反馈: {feedback[:200]}")
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pending_dir = os.path.join(base, "knowledge", "pending_review")
+    os.makedirs(pending_dir, exist_ok=True)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    filepath = os.path.join(pending_dir, f"pending-{today}.json")
+    with open(filepath, "w", encoding="utf-8") as f:
+    json.dump({
+    "timestamp": today,
+    "iterations_used": iteration,
+    "last_feedback": feedback,
+    "analyses": analyses,
+    }, f, ensure_ascii=False, indent=2)
+    print(f"[HumanFlag] 已保存到 {filepath}")
+    return {"needs_human_review": True}
+    ---
+
+21. 更新 state.py 添加 needs_human_review 字段
+    在 workflows/state.py 的 KBState 里加一行：
+    class KBState(TypedDict):
+    # plan 字段是 11-3 才加 · 本节还没有
+    sources: list[dict]
+    analyses: list[dict]
+    articles: list[dict]
+    review_feedback: str
+    review_passed: bool
+    iteration: int
+    needs_human_review: bool # ← 新增：HumanFlag 节点设为 True
+    cost_tracker: dict
+
+22. 更新 graph.py 为 3 路条件路由
+    请修改 workflows/graph.py 支持 3 路条件路由：
+    1. import revise_node 和 human_flag_node
+    2. 注册为节点 "revise" 和 "human_flag"
+    3. 重写路由函数 should_continue → route_after_review，返回 3 个分支：
+    - 通过 → "organize"
+    - 不通过且 iteration < 3 → "revise"
+    - 不通过且 iteration >= 3 → "human_flag"
+    4. 添加 graph.add_edge("revise", "review") 形成循环
+    5. 添加 graph.add_edge("human_flag", END)
+
+23. 实现 Planner-Agent
+但有两处硬编码：
+ route_after_review 里写死 iteration >= 3
+ collector.py / organizer.py / reviewer.py 里的默认值
+生产系统要能根据输入规模调整策略，数据多时要保守，数据少时要激进。这就
+是 Planner Agent 的职责，只规划不执行（Plan, don't execute）。
+Planner 挂在图的最前面，输出一个 plan dict 写入 state，下游节点读取它调整行
+为
+
+更新 state.py 添加 plan 字段（8 → 9）
+为什么先加这个字段 · planner_node 输出 {"plan": {...}} · 下游 collector /
+organizer / reviewer 通过 state["plan"] 读策略。先加字段 · 再写 planner · 类
+型安全。
+在 workflows/state.py 的 KBState 顶部加一行（11-2 后是 8 字段 · 加完后
+9 字段）：
+class KBState(TypedDict):
+plan: dict # ← 11-3 新增 · Planner 输出策略
+sources: list[dict]
+analyses: list[dict]
+articles: list[dict]
+review_feedback: str
+review_passed: bool
+iteration: int
+needs_human_review: bool # 11-2 加的
+cost_tracker: dict
+更新顶部 docstring 数据流向：
+"""
+数据流向（V3 完整 · 7 节点）：
+plan → sources → analyses → review ─[pass]→ organize → END
+↓
+revise → review（循环）
+↓[>max]
+human_flag → END
+"""
+
+24. 创建 planner.py
+    请帮我编写 workflows/planner.py：
+    需求：
+    1. plan_strategy(target_count=None) 函数，根据目标采集量返回策略 dict
+    2. 三档策略：
+    - lite (target<10): per_source_limit=5, relevance_threshold=0.7, max_
+    - standard (10<=target<20): 10, 0.5, 2
+    - full (target>=20): 20, 0.4, 3
+    3. target_count 默认从环境变量 PLANNER_TARGET_COUNT 读取（默认 10）
+    4. planner_node(state) 函数：LangGraph 节点包装，调 plan_strategy 并返回 {"p
+    5. 每个策略 dict 包含 rationale 字段说明"为什么这么选"
+
+25. 修改 graph.py 把 plan 挂到入口
+    修改 graph.py 把 plan 挂到入口
+    """LangGraph 工作流图 — 第 11 节完整 7 节点版"""
+    from langgraph.graph import END, StateGraph
+    from workflows.analyzer import analyze_node
+    from workflows.collector import collect_node
+    from workflows.human_flag import human_flag_node
+    from workflows.organizer import organize_node
+    from workflows.planner import planner_node # ← 新增
+    from workflows.reviewer import review_node
+    from workflows.reviser import revise_node
+    from workflows.state import KBState
+    def route_after_review(state: KBState) -> str:
+    """条件路由：读 state["plan"]["max_iterations"]，不再硬编码 3"""
+    plan = state.get("plan", {}) or {}
+    max_iter = int(plan.get("max_iterations", 3))
+    iteration = state.get("iteration", 0)
+    if state.get("review_passed", False):
+    return "organize"
+    elif iteration >= max_iter:
+    return "human_flag"
+    else:
+    return "revise"
+    def build_graph() -> StateGraph:
+    graph = StateGraph(KBState)
+    # 【新增】注册 plan 节点
+    graph.add_node("plan", planner_node)
+    graph.add_node("collect", collect_node)
+    graph.add_node("analyze", analyze_node)
+    graph.add_node("review", review_node)
+    graph.add_node("revise", revise_node)
+    graph.add_node("organize", organize_node)
+    graph.add_node("human_flag", human_flag_node)
+    # 【新增】plan → collect 边
+    graph.add_edge("plan", "collect")
+    graph.add_edge("collect", "analyze")
+    graph.add_edge("analyze", "review")
+    graph.add_conditional_edges(
+    "review",
+    route_after_review,
+    {
+    "organize": "organize",
+    "revise": "revise",
+    "human_flag": "human_flag",
+    },
+    )
+    graph.add_edge("revise", "review")
+    graph.add_edge("organize", END)
+    graph.add_edge("human_flag", END)
+    # 【修改】入口从 "collect" 改为 "plan"
+    graph.set_entry_point("plan")
+    return graph
+    app = build_graph().compile()
+    注意两处关键变化：
+    1. set_entry_point("plan") — 入口改为 plan
+    2. route_after_review 里 max_iter 从 state["plan"] 读取，不再硬
+    编码
