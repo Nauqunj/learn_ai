@@ -632,3 +632,556 @@ human_flag → END
     1. set_entry_point("plan") — 入口改为 plan
     2. route_after_review 里 max_iter 从 state["plan"] 读取，不再硬
     编码
+
+26. 实现 CostGuard 成本
+多 Agent 系统每次管线会调用多个 LLM：
+Analyzer(~3500 tokens) → Reviewer(~3300 tokens) → 修订重跑(+2500)
+一次正常管线：~9000 tokens ≈ ¥0.012
+一次带修订的管线：~11500 tokens ≈ ¥0.015
+如果死循环 10 次：~35000+ tokens ≈ ¥0.05+
+CostGuard 提供三重保护：成本追踪（ record() ）+ 预警提醒 + 预算熔断
+（ check() 抛出 BudgetExceededError ）。
+
+用 AI 编程工具生成 cost_guard.py
+    请帮我编写 tests/cost_guard.py，实现多 Agent 预算守卫：
+    需求：
+    1. CostRecord 数据类：记录单次 LLM 调用（timestamp, node_name, prompt_tokens
+    2. CostGuard 类，三重保护机制：
+    - record(node_name, usage, model=""): 记录一次 LLM 调用的 token 用量，usa
+    - check() -> dict: 检查预算状态，返回 {"status": "ok"|"warning"|"exceede
+    - 接近预算（>= alert_threshold）时状态为 "warning"
+    - 超出预算时抛出 BudgetExceededError 异常
+    - get_report() -> dict: 生成成本报告（按节点分组统计）
+    - save_report(path=None): 保存成本报告到 JSON 文件
+    3. 构造函数参数：budget_yuan=1.0, alert_threshold=0.8, input_price_per_mill
+    4. BudgetExceededError 异常类
+    5. 包含 if __name__ == "__main__" 的测试代码，验证：
+    - 成本追踪正确（record 后 total_prompt_tokens 和 total_cost_yuan 正确）
+    - 预算超限检测（check() 抛出 BudgetExceededError）
+    - 预警阈值触发（check() 返回 status="warning"）
+
+27. 编写 Eval 评估测试
+    AI 系统的输出不确定——同一个输入，每次调用可能得到不同的输出。传统
+    的 assert output == expected 行不通。
+    Eval 测试的核心思路：不测精确内容，测行为边界。
+     用 >= , <= , in 代替 ==
+     测试“有没有摘要”而非“摘要内容是什么”
+     正面 + 负面 + 边界 = 最小 Eval 集
+
+用 AI 编程工具生成 eval_test.py
+    请帮我在tests/ 下编写 eval_test.py，实现 AI 知识库的评估测试：
+    需求：
+    1. 使用 pytest 框架
+    2. 文件顶部用 dotenv 加载 .env，让 pytest 能读到 LLM_API_KEY；
+    并屏蔽 PytestUnknownMarkWarning（避免自定义 slow 标记触发警告）
+    3. 定义 EVAL_CASES 列表，至少包含 3 种场景：
+    - 正面案例：技术文章输入，预期有摘要、有关键词
+    - 负面案例：无关内容输入，预期被过滤或标记为低相关
+    - 边界案例：极短输入（如"AI"），预期不崩溃
+    4. 每个用例包含：name, input, expected（含检查函数或范围条件）
+    5. 测试函数使用范围断言（>=, <=, in），不用精确匹配
+    6. 包含一个 LLM-as-Judge 测试：
+    - 让 LLM 对分析结果打分（1-10）
+    - 断言分数 >= 5
+    7. 标记 LLM 测试为 pytest.mark.slow（可选跳过）
+    8. 包含一个不调用 LLM 的本地验证测试（验证 EVAL_CASES 结构）
+    依赖：workflows/model_client.py 的 chat() 函数
+    chat(prompt, system=...) 返回 (text, usage)
+
+28. 编写 Security 安全模块
+生产 Agent 系统必须防四件事：
+险 后果 模块对策
+Prompt 注
+入
+用户在 description / RSS title 里写 "ignore previous
+instructions" 篡改 Agent 行为
+sanitize_input
+PII 泄露 LLM 输出夹真实手机号 / 邮箱 / IP · 落盘后推到 GitHub 永
+久泄露
+filter_output
+滥用 高频调用导致成本失控 / API 被封 RateLimiter
+不可追溯 出问题后没法定位是哪条输入 / 哪次输出引发 AuditLogger
+12-1 写了 CostGuard，12-2 写了 Eval，这一节写第三个独立模块 Security，三件套
+齐活后，12-4 一起接入工作流。
+
+用 AI 编程工具生成 security.py
+    
+    需求 (4 类能力)：
+    1. 输入清洗（防 Prompt 注入）
+    - INJECTION_PATTERNS：英文 + 中文注入模式正则
+    - sanitize_input(text) -> (cleaned, warnings)：检测注入 + 清除控制字符 +
+    2. 输出过滤（PII 检测与掩码）
+    - PII_PATTERNS：手机号 / 邮箱 / 身份证 / 信用卡 / IP
+    - filter_output(text, mask=True) -> (filtered, detections)：检测 PII 并
+    3. 速率限制（防滥用）
+    - RateLimiter(max_calls, window_seconds) 滑动窗口实现
+    - check(client_id) -> bool：True=允许, False=限流
+    - get_remaining(client_id) -> int
+    4. 审计日志（可追溯）
+    - AuditEntry 数据类（timestamp, event_type, details, warnings）
+    - AuditLogger 类：log_input / log_output / log_security / get_summary
+    便捷集成函数：secure_input(text, client_id) 与 secure_output(text)
+    包含 if __name__ == "__main__" 分别测试 4 类能力
+
+
+    CostGuard 不挂在 model_client.chat 后面 ，token 用了多少没人记。
+    Security 不挂在 collect_node 入口 ，GitHub description 里有 prompt 注入直接
+    进 LLM。
+    PII 过滤不挂在 organize_node 出口，输出文件里出现手机号 / 邮箱也没人拦。
+
+
+    接入位置一图看懂
+    ┌──────────────────┐
+    [user input] ──→ collect ─┤ ① sanitize_input ├─→ analyze ──→ review ──→
+    实操 产出 测试
+    12-1 tests/cost_guard.py · CostGuard 类 + 三重保
+    护
+    ✅ 单元测试 record / check / 熔
+    断 全过
+    12-2 tests/eval_test.py · pytest 范围断言 + LLMas-Judge
+    ✅ pytest 全过
+    12-3 tests/security.py · sanitize_input +
+    filter_output
+    ✅ 注入检测 + PII 掩码 全过
+    1
+    2
+    1
+    2
+    └──────────────────┘ │
+    │
+    ┌──────────────────────────────────────────────────────────────┘
+    │
+    ↓ ┌──────────────────┐
+    ... organize ──────────────┤ ② filter_output ├─→ knowledge/articles/
+    └──────────────────┘
+    每次 LLM 调用：
+    model_client.chat(...) ──→ ③ cost_guard.record(node, usage)
+    工作流入口 graph.invoke(...) 之前 / 之后：
+    ──→ ④ cost_guard.check() · 超预算抛 BudgetExceeded
+    4 个接入点 都是横切关注（cross-cutting concern），不改业务逻辑，只在入口 / 出
+    口 / 调用点加保护。
+
+CostGuard 接入 model_client + graph
+    让 model_client.chat 自动 record
+    请帮我修改 workflows/model_client.py：
+    1. 在文件顶部加全局 CostGuard 实例（懒加载）：
+    - get_cost_guard() 函数 · 第一次调时创建 · 后续复用同一实例
+    - budget_yuan 从环境变量 BUDGET_YUAN 读 · 默认 1.0
+    2. 修改 chat() 函数：
+    - 多接一个参数 node_name: str = "unknown"
+    - 调完 LLM 拿到 usage 后 · 立刻 cost_guard.record(node_name, usage, mode
+    - 然后 cost_guard.check() · 让超预算自动抛 BudgetExceededError
+    3. chat_json() 把 node_name 透传给 chat()
+    4. 不要破坏原有签名 · 现有节点不传 node_name 也能跑（用默认值）
+     让节点传 node_name 进来
+     在 graph.py 收尾时打成本报告
+
+Security 接入 collect / organize
+     collect_node 入口 sanitize_input
+     修改 workflows/collector.py ：
+      from tests.security import sanitize_input # ← 新增 import
+      def collect_node(state: KBState) -> dict:
+      # ... 原有 GitHub API 抓取逻辑不变 ...
+      sources: list[dict] = [...] # 假设这里已经拿到原始数据
+      # ★ 接入点 ④ · 出 collect 之前对每条 source 的文本字段做清洗
+      cleaned_sources = []
+      total_warnings = 0
+      for s in sources:
+      for field in ("title", "description"):
+      if field in s and isinstance(s[field], str):
+      cleaned, warnings = sanitize_input(s[field])
+      s[field] = cleaned
+      total_warnings += len(warnings)
+      if warnings:
+      print(f"[Security] {s.get('url', '?')} {field} 检出注
+      cleaned_sources.append(s)
+      if total_warnings > 0:
+      print(f"[Security] collect 阶段共拦截 {total_warnings} 处可疑输入")
+      print(f"[Collector] 采集到 {len(cleaned_sources)} 条原始数据")
+      return {"sources": cleaned_sources}
+organize_node 出口 filter_output
+  为什么挂在 organize？
+  organize 之后下一步就是 写盘。 一旦 LLM 输出里夹了真实手机号 / 邮箱 / 身份证，
+  就会落到 knowledge/articles/*.md ，一旦推到 GitHub 就永久泄露。所以掩
+  码必须在写盘之前。
+  修改 workflows/organizer.py ：
+  from tests.security import filter_output # ← 新增 import
+  def organize_node(state: KBState) -> dict:
+  # ... 原有去重 / 格式化逻辑不变 ...
+  articles: list[dict] = [...] # 假设这里已经拿到格式化后的条目
+  # ★ 接入点 ⑤ · 写盘前对每条 article 做 PII 掩码
+  masked_articles = []
+  total_pii = 0
+  for art in articles:
+  for field in ("summary", "content", "title"):
+  if field in art and isinstance(art[field], str):
+  filtered, detections = filter_output(art[field], mask=Tr
+  art[field] = filtered
+  total_pii += len(detections)
+  if detections:
+  print(f"[Security] {art.get('id', '?')} {field} 掩码
+  masked_articles.append(art)
+  if total_pii > 0:
+  print(f"[Security] organize 阶段共掩码 {total_pii} 处 PII")
+  print(f"[Organizer] 整理出 {len(masked_articles)} 条知识条目")
+  return {"articles": masked_articles}
+
+关键设计：为什么 sanitize 在入口 / filter 在出口
+入口（collect）做 sanitize。是因为 源头脏数据 进 LLM 才会污染所有下游。越早洗越
+省 token。
+出口（organize）做 filter，是因为 LLM 输出 永远不可信，即使 prompt 干净，模型也
+可能联想出真实邮箱（训练数据里见过），必须在 最后一道写盘前拦一次。
+中间节点（analyze / review / revise）不洗，让它们专心做业务，横切关注集中在两
+端。
+
+28. 安装 OpenClaw 并
+    OpenClaw 是消息网关——它把 Telegram/微信/钉钉的消息路由到你的 Agent。本实操从零
+    安装 OpenClaw，创建 Telegram Bot，让 Bot 说出第一句话。
+      node --version
+    # 需要 v22.0.0 或更高
+    如果版本低于 22 或未安装：
+    # 方法 1：使用 nvm（推荐）
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh
+    source ~/.bashrc
+    nvm install 22
+    nvm use 22
+    # 方法 2：使用 fnm（更快）
+    curl -fsSL https://fnm.vercel.app/install | bash
+    source ~/.bashrc
+    fnm install 22
+    fnm use 22
+
+安装 OpenClaw
+    npm install -g openclaw
+    # 全局安装
+    npm install -g openclaw@latest
+    # 验证安装
+    openclaw --version
+    # 输出类似：openclaw v1.x.x
+
+初始化项目
+    openclaw onboard --install-daemon
+    openclaw onboard --install-daemon --workspace .
+      必须在 项目下跑 onboard——这样 OpenClaw 才会把这个目录认
+  作 workspace 的“项目根”（虽然默认还是用全局 workspace，下一节实操 2 会切到这
+  里）。
+    onboard 会自动生成 openclaw/ 子目录及
+    AGENTS.md / SOUL.md / skills/。
+
+    安装飞书，1. 登录【飞书开放平台 - 开发者后台】，选择你的飞书组织，**创建【企业自建应用】**
+              2. 左侧菜单【功能】→【机器人】，**开启机器人能力**，填头像、名字、描述
+              3. 【凭证与基础信息】拿到关键三要素，存到你的 Agent 配置里：
+                - App ID
+                - App Secret
+                - Verification Token（事件订阅用）
+              4. 【权限管理】申请核心消息权限（Agent 必开）
+                - `im:message` 消息基础权限
+                - `im:message.p2p_msg:readonly` 私聊消息读取
+                - `im:message.group_at_msg:readonly` 群内 @消息读取
+                - `im:message.send_as_bot` 以机器人身份发消息
+                - contact:contact.base:readonly
+                contact:contact
+              5. 【事件订阅】
+                - 方案 A（有公网 HTTPS 服务）：填你的 Agent 服务回调 URL，飞书会把用户消息 POST 给你
+                - 方案 B（本地调试、没有公网）：**长连接（WebSocket）**，不需要公网，本地电脑直接跑 Agent，非常适合开发调试（OpenCode、Pi Agent、OpenClaw 都支持）
+                - 订阅事件：`im.message.receive_v1`（用户发消息事件）
+              6. 版本发布与测试
+                - 【版本管理与发布】创建版本，**内部测试发布**（不用对外审核，仅当前组织可用）
+                - 在飞书里搜机器人名字，添加到群 / 发起私聊，消息会推送到你的 Agent 后端
+      修改飞书密钥： openclaw channels add
+      # 修改AppID
+      openclaw config set channels.feishu.appId "cli_xxxxxxxxxxxxxxxx"
+      # 修改AppSecret
+      openclaw config set channels.feishu.appSecret "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      openclaw gateway restart
+      重启之后查看飞书通道状态，确认是否正常：
+        openclaw channels status feishu
+
+        1. `--verbose`：打印详细日志（推荐，直接看到启动卡在哪一行）
+        2. `--force`：强制杀掉占用 18789 端口的残留进程
+        openclaw gateway run --verbose --force
+
+      修改每次都要匹配码的问题
+      先关掉正在运行的网关（PowerShell 里 Ctrl+C）
+      用记事本 / VS Code 打开 `openclaw.json`，修改上面字段 C:\Users\junquan\.openclaw\openclaw.json
+      ### 找到飞书 channels.feishu 这块
+
+      找到 `channels` → `feishu`，里面的 `dmPolicy`，默认是 `"pairing"`（就是你现在要手动配对的模式）
+      "allowFrom":["*"]
+      如果没有"dmPolicy": "open", 新增这个
+            ```
+            "channels": {
+        "feishu": {
+          "enabled": true,
+          "dmPolicy": "open",
+          "allowFrom":["*"]
+          "streaming": true,
+          "accounts": {
+            "main": {
+              "appId": "cli_xxxx",
+              "appSecret": "xxxx",
+              "verificationToken": "xxxx"
+            }
+          }
+        }
+      }
+      ```
+
+      ### （装完 daemon 之后）
+      openclaw gateway uninstall
+
+      ```
+      openclaw daemon start    # 启动后台网关
+      openclaw daemon stop     # 停止
+      openclaw daemon restart  # 重启
+      openclaw daemon status   # 看是否在线
+      openclaw daemon uninstall # 删除这个后台服务，切回前台模式
+      ```
+
+      # 实时持续跟踪日志（推荐，和你前台跑 gateway 看到的内容一样）
+      openclaw logs --follow
+
+29. 让 Bot 看到你的知识库
+装好的 Bot 在 OpenClaw 默认 workspace（ ~/.openclaw/workspace/ ）—— 那里
+只有 Bot 自己的人格文件，看不到你 Week 1-3 攒的知识库。
+本节做 5 步，让 Bot 真正“看见”知识库：
+1. 把 v3 的代码和 knowledge/ 数据搬到 v4-production
+2. 切 OpenClaw workspace 到 v4-production/openclaw
+3. 清掉 OpenClaw 自动塞的占位文件
+4. 软链 knowledge 进 workspace
+5. 改 workspace AGENTS.md，告诉 Bot "怎么读知识库"
+
+      切 workspace 到 项目
+      openclaw config set agents.defaults.workspace D:\gitHupProject\knowledge-project\openclaw
+      重启 Bot
+      openclaw daemon restart
+
+      ① 先搬文件（在改配置之前）
+      robocopy "C:\Users\junquan\.openclaw\workspace" "D:\gitHupProject\knowledge-project\openclaw" /E /XD .git
+      带上 AGENTS.md / SOUL.md / IDENTITY.md / USER.md，以后有 memory/ 也一起过去
+      排除 .git：那个仓库零提交，没有搬的价值；而且目标在 knowledge-project 这个已有 git 仓库里面，嵌套仓库只会添乱
+      老目录先别删，等验证完再说
+      ② 把 workspace 钉在 agent 上（关键，不是 defaults）
+      openclaw config set agents.entries.main.workspace "D:\gitHupProject\knowledge-project\openclaw"
+      文档明确写了：只改 agents.defaults.workspace 只是给没钉过的 agent 设默认根，main 这种有显式 workspace 的条目不受影响 —— 你之前那条命令就是卡在这。
+
+      ③ 校验 + 修复
+      openclaw config validate
+      openclaw doctor --fix
+
+      ④ 重启 Gateway
+      agents 这一族在 hot-reload 表里属于「不需要重启」（hybrid 模式会自动应用）。但文档有个例外要留意：如果新工作区会被判定带着"退役的 setup state"，这次切换会被拒绝，那就得按它的路子走 —— 停 Gateway → 写配置 → openclaw doctor --fix → 重启。
+
+
+      ### 一定要用 daemon 开机后台常驻
+
+        需要强制重装计划任务，覆盖旧的任务定义
+
+        ```
+        # 卸载旧计划任务
+        openclaw gateway uninstall
+        # 强制重新安装网关服务
+        openclaw gateway install --force
+        # 启动
+        openclaw gateway start
+        # 查看状态
+        openclaw gateway status --deep
+        ```
+
+输出大概这样：
+AGENTS.md Mar 29 16:56 ← 实操 1 onboard 生成,要保留
+SOUL.md Mar 29 16:56 ← 实操 1 onboard 生成,要保留
+BOOTSTRAP.md Apr 25 10:00 ← 切 workspace 时塞的占位,要删
+HEARTBEAT.md Apr 25 10:00 ← 占位,删
+IDENTITY.md Apr 25 10:00 ← 占位,删
+TOOLS.md Apr 25 10:00 ← 占位,删
+USER.md Apr 25 10:00 ← 占位,删
+
+
+软链 knowledge 进 workspace
+onboard 生成的 SKILL.md（ skills/knowledge-query/SKILL.md ）用相对路
+径 knowledge/articles/... 读数据。但 workspace 是 openclaw/ 子目录，相对路径解
+析的是 openclaw/knowledge/ ，并不存在。
+所以我们软链一下让路径有效：
+
+    cd ~/ai-knowledge-base/v4-production/openclaw
+    ln -sfn ../knowledge knowledge
+
+     ls -la knowledge
+        lrwxrwxrwx ... knowledge -> ../knowledge
+        $ ls knowledge/articles/ | head -3
+        2026-04-11-000.json
+        2026-04-11-001.json
+        2026-04-11-002.json
+
+
+
+实现 formatter 格式
+   确认真实知识库数据
+   cd ~/ai-knowledge-base/v4-production
+    # 看一下索引（每条 4 个字段：id / title / category / relevance_score）
+    ls knowledge/articles/index.json
+    python3 -c "
+    import json
+    d = json.load(open('knowledge/articles/index.json'))
+    print(f'索引共 {len(d)} 条')
+    print('样例:', d[0])
+    "
+    # 看一下单篇文章的完整 schema
+    ls knowledge/articles/2026-04-11-000.json
+    python3 -c "
+    import json
+    a = json.load(open('knowledge/articles/2026-04-11-000.json'))
+    print('字段:', list(a.keys()))
+    "
+    期
+
+用 AI 编程工具生成 formatter.py
+    请帮我编写 /distribution/formatter.py 格式
+      输入数据 schema（单篇文章 JSON · v3 LangGraph Organizer 节点产出）：
+      {
+      "id": "2026-04-11-000",
+      "title": "langgenius/dify",
+      "source": "github",
+      "url": "https://github.com/langgenius/dify",
+      "collected_at": "2026-04-11T16:03:47.946653+00:00",
+      "summary": "Dify 是一个开源 LLM 应用开发平台...",
+      "tags": ["LLM应用开发", "智能体工作流", "RAG"],
+      "relevance_score": 0.9,
+      "category": "framework",
+      "key_insight": "Dify 通过一体化平台显著降低 AI 工作流开发门槛"
+      }
+      需求：
+      1. json_to_markdown(article) — 单篇 → Markdown
+      - 标题、来源、日期（截 collected_at 前 10 位）、相关性评分（>= 0.8 🟢 / >= 0
+      2. json_to_telegram(article) — 单篇 → Telegram MarkdownV2
+      - 转义 _*[]()~`>#+-=|{}.! 这些特殊字符
+      - 标题链接、summary、相关性、来源、tag(空格替换为下划线)
+      3. json_to_feishu(article) — 单篇 → 飞书 interactive 卡片 dict
+      - msg_type=interactive, header.template 按 score 染色（green/yellow/red
+      4. generate_daily_digest(knowledge_dir="knowledge/articles", date=None,
+      - date=None 默认今天；用 Path.glob(f"{date}-*.json") 扫文件
+      - 按 relevance_score 降序取 Top N
+      - 返回 dict: {"markdown": ..., "telegram": ..., "feishu": ...}
+      - 当日无文章时返回 "📭 {date} 暂无新增知识条目"
+      编码规范：PEP 8，Google 风格 docstring，类型注解。formatter 是纯函数，不发网络请
+
+测 1 · 单篇格式化（拿索引第一条 = 2026-04-11-000 Dify）：
+cd ~/ai-knowledge-base/v4-production
+python3 -c "
+import json
+from distribution.formatter import json_to_markdown, json_to_telegram, j
+article = json.load(open('knowledge/articles/2026-09-24-000.json'))
+print('=== Markdown ===')
+print(json_to_markdown(article))
+print()
+print('=== Telegram ===')
+print(json_to_telegram(article))
+print()
+print('=== Feishu (前 200 字符) ===')
+print(json.dumps(json_to_feishu(article), ensure_ascii=False)[:200])
+"
+
+测 2 · 当日简报（用知识库里真实有的日期 2026-09-24 ，那天 10 条）：
+python3 -c "
+from distribution.formatter import generate_daily_digest
+result = generate_daily_digest(date='2026-09-24', top_n=5)
+print('=== Markdown 简报 ===')
+print(result['markdown'])
+"
+
+
+实现 publish 推送模块
+推送层负责把格式化内容发送到目标渠道：
+formatter.py（已完成） → publisher.py（本实操） → Telegram / 飞书（异步并发）
+推送层依赖网络（Telegram API / 飞书 webhook）。没配凭证的同学可以先跑 dry-run（步
+骤 3），有凭证再跑真实推送（步骤 4）。
+
+用 AI 编程工具生成 publisher.py
+
+请帮我编写 /distribution/publisher.py 推送
+需求：
+1. OOP 架构：BasePublisher 抽象基类，定义 send_message() 和 send_digest() 接
+2. TelegramPublisher — 通过 Telegram Bot API 异步发送 MarkdownV2 消息
+- 读取环境变量 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID
+- 使用 aiohttp 异步请求，超时 30 秒
+3. FeishuPublisher — 通过飞书 Webhook 发送卡片消息
+- 读取环境变量 FEISHU_WEBHOOK_URL
+4. PublishResult 数据类 — 记录每次发布结果（channel, success, message_id, er
+5. publish_daily_digest() — 统一异步入口
+- 调用 generate_daily_digest() 生成三种格式
+- 并发发布到所有渠道
+编码规范：PEP 8，Google 风格 docstring
+依赖：aiohttp
+
+安装依赖
+pip install aiohttp
+
+测试推送
+
+
+配置每日推送
+   手动运行不是产品。产品需要无人值守、按时推送
+   用 AI 编程工具生成 daily_digest.py
+   请帮我编写 ./daily_digest.py 每日推送入口脚本
+    需求：
+    1. 从 formatter.py 加载文章
+    2. 过滤 relevance_score < 60 的低质量文章
+    3. 调用 publisher.py 的 publish_daily_digest() 推送到所有渠道
+    4. 打印推送结果汇总（成功/失败渠道数）
+    5. 没有高质量文章时跳过推送并打印警告
+    编码规范：PEP 8，包含 if __name__ == "__main__" 入口
+
+手动运行测试
+cd ~/ai-knowledge-base/v4-production
+python3 daily_digest.py
+
+创建 OpenClaw daily-digest Skill
+    OpenClaw Cron 需要通过 Skill 触发，所以先创建一个 Skill 描述文件。
+    mkdir -p ./openclaw/skills/daily-digest
+    参考实现： ./openclaw/skills/daily-digest/SKILL.md
+    ---
+    name: daily-digest
+    description: 生成今日 AI 技术简报，汇总当天采集的 Top 5 知识条目，按相关性排序
+    allowed-tools:
+    - Read
+    ---
+    # 每日简报技能
+    ## 触发条件
+    当用户想要查看今日 / 本周 AI 技术汇总时激活。
+    典型触发词：简报、摘要、今日、daily、digest、briefing
+    ## 生成流程
+    > **重要 · 只允许 Read**：本技能不能用 Glob / Grep / exec。所有操作从 `Read kn
+    ### Step 1: 读索引定位今日数据
+    用 `Read` 读 `knowledge/articles/index.json`（含每篇文章的 `id` / `title` /
+    **在内存里筛**今日的条目（`collected_at` 字段以今日日期开头）；今日无数据则回退到最
+    > **不要尝试 Glob 或 grep 文件名** —— 索引文件已经聚合了所有元信息，一次 Read 就够
+    ### Step 2: 内存过滤 + 排序
+    1. 过滤 `relevance_score >= 0.6` 的条目
+    2. 按 `relevance_score` 降序排序
+    3. 取 Top 5
+    只对最终要进简报的 Top 5，用 `Read knowledge/articles/{id}.json` 拿 `summary
+    ### Step 3: 按 category 分组生成 Markdown 简报
+    ## 与 Publisher 的分工
+    - **本 Skill**：格式化文本，生成 Markdown 简报
+    - **distribution/publisher.py**：把简报推送到 Telegram / 飞书 / 文件
+    Skill 负责"写"，Publisher 负责"发"。
+
+配置 Cron 定时任务
+  主线方案：系统 Crontab
+  crontab -e
+  添加（注意用绝对路径 + python 全路径）：
+  # 每天早上 8:00 推送
+  0 8 * * * cd ./ && /usr/bin/python3 dailydaily_digest.py
+  确保日志目录存在：
+  mkdir -p ./logs
+
+验证 Cron 配置
+  crontab -l | grep daily_digest
+    # 应看到刚加的那一行
+    快速验证（用 1 分钟后触发）
+    如果不想等到第二天 8 点。临时改成 1 分钟后跑一次：
+    NEXT=$(date -d "+1 minute" +"%M %H")
+    (crontab -l 2>/dev/null; echo "$NEXT * * * cd /home/$USER/ai-knowledge-b
+    sleep 80
+    cat ~/ai-knowledge-base/v4-production/logs/cron-test.log
